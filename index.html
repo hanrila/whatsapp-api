@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp API Dashboard</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #25D366;
+            --success-color: #34B7F1;
+            --error-color: #FF4B4B;
+            --warning-color: #FFA500;
+            --text-color: #1C1E21;
+            --bg-color: #F0F2F5;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 2rem;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 600;
+            color: var(--text-color);
+            margin-bottom: 0.5rem;
+        }
+
+        .header p {
+            color: #65676B;
+            font-size: 1.1rem;
+        }
+
+        #status {
+            text-align: center;
+            margin: 2rem 0;
+            padding: 1rem;
+            border-radius: 12px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .connected {
+            background-color: rgba(37, 211, 102, 0.1);
+            color: var(--primary-color);
+        }
+
+        .disconnected {
+            background-color: rgba(255, 75, 75, 0.1);
+            color: var(--error-color);
+        }
+
+        .connecting {
+            background-color: rgba(255, 165, 0, 0.1);
+            color: var(--warning-color);
+        }
+
+        #qr-code {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 2rem 0;
+            min-height: 300px;
+        }
+
+        #qr-code img {
+            max-width: 300px;
+            height: auto;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease;
+        }
+
+        #qr-code img:hover {
+            transform: scale(1.02);
+        }
+
+        .loading {
+            display: inline-block;
+            width: 50px;
+            height: 50px;
+            border: 3px solid rgba(0, 0, 0, 0.1);
+            border-radius: 50%;
+            border-top-color: var(--primary-color);
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 1rem;
+            }
+
+            .container {
+                padding: 1rem;
+            }
+
+            .header h1 {
+                font-size: 2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>WhatsApp API Dashboard</h1>
+            <p>Connect your WhatsApp account to get started</p>
+        </div>
+        <div id="status" class="connecting">Initializing connection...</div>
+        <div id="qr-code">
+            <div class="loading"></div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const statusDiv = document.getElementById('status');
+        const qrDiv = document.getElementById('qr-code');
+
+        socket.on('message', (msg) => {
+            statusDiv.textContent = msg;
+            statusDiv.className = msg.toLowerCase().includes('ready') ? 'connected' : 
+                                 msg.toLowerCase().includes('connecting') || msg.toLowerCase().includes('received') ? 'connecting' : 'disconnected';
+        });
+
+        socket.on('qr', (qr) => {
+            qrDiv.innerHTML = `<img src="${qr}" alt="QR Code" title="Scan this QR code with WhatsApp">`;
+        });
+
+        socket.on('ready', () => {
+            qrDiv.innerHTML = `
+                <svg width="100" height="100" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" fill="#25D366"/>
+                    <path d="M7 13L10 16L17 9" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            `;
+        });
+
+        socket.on('authenticated', () => {
+            qrDiv.innerHTML = '';
+        });
+    </script>
+</body>
+</html>
