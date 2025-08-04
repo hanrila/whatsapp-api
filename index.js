@@ -205,30 +205,22 @@ function getCurrentDateTime() {
   const year = jakartaTime.getFullYear();
   const hours = jakartaTime.getHours().toString().padStart(2, '0');
   const minutes = jakartaTime.getMinutes().toString().padStart(2, '0');
-  const seconds = jakartaTime.getSeconds().toString().padStart(2, '0');
   
   const monthNames = [
     'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
     'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
   ];
   
-  return `${day} ${monthNames[month - 1]} ${year}, ${hours}:${minutes}:${seconds} WIB`;
-}
-
-// Helper function to get smart greeting based on time
-function getSmartGreeting() {
-  const now = new Date();
-  const hour = now.getHours();
+  const dayNames = [
+    'Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'
+  ];
   
-  if (hour >= 5 && hour < 12) {
-    return "Selamat pagi";
-  } else if (hour >= 12 && hour < 15) {
-    return "Selamat siang";
-  } else if (hour >= 15 && hour < 18) {
-    return "Selamat sore";
-  } else {
-    return "Selamat malam";
-  }
+  const dayName = dayNames[jakartaTime.getDay()];
+  
+  return {
+    formattedDate: `${dayName}, ${day} ${monthNames[month - 1]} ${year}`,
+    formattedTime: `${hours}:${minutes}`
+  };
 }
 
 // Helper function to convert Zerto status code to human-readable description
@@ -251,7 +243,7 @@ function getStatusDescription(statusCode) {
   return String(statusCode || 'Unknown');
 }
 
-// Function to generate RPO report
+// Function to generate RPO report exactly like Python script
 function generateRpoReport(vms, vpgs) {
   const vmMap = new Map();
   vms.forEach(vm => {
@@ -271,14 +263,17 @@ function generateRpoReport(vms, vpgs) {
       const statusCode = vm.Status;
       const statusDescription = getStatusDescription(statusCode);
       
+      // Use ActualRPO directly from the API response (like Python script)
+      const actualRpo = vm.ActualRPO || 0;
+      
       rpoData.push({
         vmName: vm.VmName,
         vpgName: vpg.VpgName,
-        rpoInSeconds: vm.RpoInSeconds || 0,
+        rpoInSeconds: actualRpo,  // Keep for backward compatibility
         status: statusDescription,
         statusCode: statusCode,
         lastTest: vm.LastTest || 'N/A',
-        actualRpo: vm.ActualRpo || 0
+        actualRpo: actualRpo     // This is the correct field name from API
       });
     }
   });
@@ -286,91 +281,142 @@ function generateRpoReport(vms, vpgs) {
   return rpoData;
 }
 
-// Function to generate WhatsApp message for Zerto report
-function generateZertoWhatsAppMessage(rpoData, location) {
-  const greeting = getSmartGreeting();
-  const currentTime = getCurrentDateTime();
+// Function to generate WhatsApp message exactly like Python script
+function generateZertoWhatsAppMessage(jeparaVms, jakartaVms) {
+  const { formattedDate, formattedTime } = getCurrentDateTime();
+  const now = new Date();
   
-  let message = `${greeting}! 🌟\n\n`;
-  message += `📊 *LAPORAN ZERTO REPLICATION - ${location.toUpperCase()}*\n`;
-  message += `🕐 Waktu: ${currentTime}\n\n`;
-
-  if (rpoData.length === 0) {
-    message += `❌ Tidak ada data VM yang ditemukan untuk lokasi ${location}\n\n`;
-    return message;
-  }
-
-  // Group by status
-  const statusGroups = {
-    'Protected': [],
-    'Error': [],
-    'Warning': [],
-    'Other': []
-  };
-
-  rpoData.forEach(vm => {
-    const status = String(vm.status || 'Unknown');
-    if (status === 'MeetingSLA') {
-      statusGroups.Protected.push(vm);
-    } else if (status.includes('NotMeetingSLA') || status.includes('RpoNotMeetingSLA') || status === 'FailingOver' || status === 'Deleting') {
-      statusGroups.Error.push(vm);
-    } else if (status.includes('HistoryNotMeetingSLA') || status === 'Initializing' || vm.rpoInSeconds > 300) {
-      statusGroups.Warning.push(vm);
-    } else {
-      statusGroups.Other.push(vm);
-    }
-  });
-
-  // Summary
-  message += `📈 *RINGKASAN STATUS:*\n`;
-  message += `✅ Protected: ${statusGroups.Protected.length}\n`;
-  message += `⚠️ Warning: ${statusGroups.Warning.length}\n`;
-  message += `❌ Error: ${statusGroups.Error.length}\n`;
-  message += `ℹ️ Lainnya: ${statusGroups.Other.length}\n`;
-  message += `📊 Total VM: ${rpoData.length}\n\n`;
-
-  // Detailed status for errors and warnings
-  if (statusGroups.Error.length > 0) {
-    message += `🚨 *VM DENGAN ERROR:*\n`;
-    statusGroups.Error.forEach(vm => {
-      message += `• ${vm.vmName} (${vm.vpgName})\n  Status: ${vm.status}\n`;
-    });
-    message += `\n`;
-  }
-
-  if (statusGroups.Warning.length > 0) {
-    message += `⚠️ *VM DENGAN WARNING/RPO TINGGI:*\n`;
-    statusGroups.Warning.forEach(vm => {
-      const rpoMinutes = Math.round(vm.rpoInSeconds / 60);
-      message += `• ${vm.vmName} (${vm.vpgName})\n  RPO: ${rpoMinutes} menit\n`;
-    });
-    message += `\n`;
-  }
-
-  // RPO Analysis
-  const avgRpo = rpoData.reduce((sum, vm) => sum + vm.rpoInSeconds, 0) / rpoData.length;
-  const avgRpoMinutes = Math.round(avgRpo / 60);
-  
-  message += `📊 *ANALISIS RPO:*\n`;
-  message += `📈 RPO Rata-rata: ${avgRpoMinutes} menit\n`;
-  
-  const highRpoVms = rpoData.filter(vm => vm.rpoInSeconds > 300);
-  if (highRpoVms.length > 0) {
-    message += `⚠️ VM dengan RPO > 5 menit: ${highRpoVms.length}\n`;
-  }
-
-  message += `\n🔄 *Status Replikasi ${location.toUpperCase()}:* `;
-  if (statusGroups.Error.length === 0 && statusGroups.Warning.length === 0) {
-    message += `✅ SEHAT\n`;
-  } else if (statusGroups.Error.length > 0) {
-    message += `❌ PERLU PERHATIAN\n`;
+  // Smart greeting based on time windows (like Python script)
+  let greeting;
+  if (now.getHours() < 10) {
+    greeting = "Selamat pagi Team";
+  } else if (now.getHours() >= 10 && now.getHours() < 15) {
+    greeting = "Selamat siang Team";
+  } else if (now.getHours() >= 15 && now.getHours() < 18) {
+    greeting = "Selamat sore Team";
   } else {
-    message += `⚠️ MONITORING\n`;
+    greeting = "Selamat malam Team";
   }
-
-  message += `\n📱 Laporan otomatis dari NOA WhatsApp API\n`;
-  message += `🤖 Powered by Zerto API Integration`;
-
+  
+  // Function to analyze VM data for a specific DC
+  function analyzeDcData(vms, dcName) {
+    const totalVms = vms.length;
+    let rpoIssues = 0;
+    let statusIssues = 0;
+    const errorDetails = [];
+    let maxRpo = 0;
+    const statusCounts = {};
+    
+    vms.forEach(vm => {
+      const vmName = vm.vmName;
+      const actualRpo = vm.actualRpo || 0;  // This should now have the correct value
+      const statusCode = vm.statusCode;
+      
+      // Track maximum RPO (ensure it's a number)
+      if (typeof actualRpo === 'number' && actualRpo > maxRpo) {
+        maxRpo = actualRpo;
+      }
+      
+      // Check for RPO issues (> 15 minutes = 900 seconds)
+      if (typeof actualRpo === 'number' && actualRpo > 900) {
+        rpoIssues++;
+        const rpoMinutes = Math.round(actualRpo / 60);
+        errorDetails.push(`• ${dcName} - ${vmName}: RPO ${actualRpo} detik (>${rpoMinutes} menit)`);
+      }
+      
+      // Count status occurrences
+      const statusDesc = vm.status;
+      statusCounts[statusDesc] = (statusCounts[statusDesc] || 0) + 1;
+      
+      // Check for status issues (not MeetingSLA)
+      if (statusCode !== 1) { // 1 = MeetingSLA
+        statusIssues++;
+        errorDetails.push(`• ${dcName} - ${vmName}: Status ${statusDesc}`);
+      }
+    });
+    
+    return {
+      totalVms,
+      rpoIssues,
+      statusIssues,
+      errorDetails,
+      maxRpo,
+      statusCounts
+    };
+  }
+  
+  // Analyze both data centers
+  const jeparaData = analyzeDcData(jeparaVms, "MINI DC Jepara");
+  const jakartaData = analyzeDcData(jakartaVms, "DC Jakarta");
+  
+  // Check if this is a single location test
+  const isSingleLocation = (jeparaVms.length === 0 && jakartaVms.length > 0) || 
+                          (jakartaVms.length === 0 && jeparaVms.length > 0);
+  
+  // Combined totals
+  const totalVms = jeparaData.totalVms + jakartaData.totalVms;
+  const totalRpoIssues = jeparaData.rpoIssues + jakartaData.rpoIssues;
+  const totalStatusIssues = jeparaData.statusIssues + jakartaData.statusIssues;
+  const allErrorDetails = [...jeparaData.errorDetails, ...jakartaData.errorDetails];
+  const maxRpo = Math.max(jeparaData.maxRpo, jakartaData.maxRpo);
+  
+  // Build WhatsApp message
+  let message = `${greeting}, berikut adalah laporan hasil replikasi Zerto pada hari ${formattedDate} pukul ${formattedTime}.\n\n`;
+  
+  // Main status message - adjust text based on single vs combined location
+  if (totalRpoIssues === 0 && totalStatusIssues === 0) {
+    if (isSingleLocation) {
+      const locationName = jeparaVms.length > 0 ? "MINI DC Jepara" : "DC Jakarta";
+      message += `✅ Semua ${totalVms} server dari ${locationName} memenuhi SLA dengan RPO time kurang dari 15 menit (maksimal: ${maxRpo} detik).`;
+    } else {
+      message += `✅ Semua ${totalVms} server dari kedua data center memenuhi SLA dengan RPO time kurang dari 15 menit (maksimal: ${maxRpo} detik).`;
+    }
+  } else {
+    const totalIssues = totalRpoIssues + totalStatusIssues;
+    message += `⚠️ Ditemukan ${totalIssues} masalah pada replikasi server:`;
+    
+    if (totalRpoIssues > 0) {
+      message += `\n\n🔴 RPO Issues (${totalRpoIssues} server):`;
+      allErrorDetails.filter(d => d.includes("RPO")).forEach(detail => {
+        message += `\n${detail}`;
+      });
+    }
+    
+    if (totalStatusIssues > 0) {
+      message += `\n\n🟡 Status Issues (${totalStatusIssues} server):`;
+      allErrorDetails.filter(d => d.includes("Status")).forEach(detail => {
+        message += `\n${detail}`;
+      });
+    }
+  }
+  
+  // Add detailed breakdown per DC - only show active DCs
+  message += `\n\n📊 Ringkasan per Data Center:`;
+  
+  if (jeparaData.totalVms > 0) {
+    message += `\n🏢 MINI DC Jepara: ${jeparaData.totalVms} server`;
+    if (jeparaData.rpoIssues + jeparaData.statusIssues === 0) {
+      message += ` - ✅ Semua OK`;
+    } else {
+      message += ` - ⚠️ ${jeparaData.rpoIssues + jeparaData.statusIssues} masalah`;
+    }
+  }
+  
+  if (jakartaData.totalVms > 0) {
+    message += `\n🏢 DC Jakarta: ${jakartaData.totalVms} server`;
+    if (jakartaData.rpoIssues + jakartaData.statusIssues === 0) {
+      message += ` - ✅ Semua OK`;
+    } else {
+      message += ` - ⚠️ ${jakartaData.rpoIssues + jakartaData.statusIssues} masalah`;
+    }
+  }
+  
+  // Add overall summary
+  message += `\n\n📈 Total Keseluruhan:`;
+  message += `\n• Total Server: ${totalVms}`;
+  message += `\n• RPO Maksimal: ${maxRpo} detik`;
+  message += `\n• Server Bermasalah: ${totalRpoIssues + totalStatusIssues}`;
+  
   return message;
 }
 
@@ -425,9 +471,12 @@ async function processZertoLocation(location) {
     // Generate RPO report
     const rpoData = generateRpoReport(vms, vpgs);
     
-    // Generate WhatsApp message
-    const whatsappMessage = generateZertoWhatsAppMessage(rpoData, location);
-
+    // Generate WhatsApp message for single location
+    const whatsappMessage = generateZertoWhatsAppMessage(
+      location === 'jepara' ? rpoData : [],
+      location === 'jakarta' ? rpoData : []
+    );
+    
     return {
       success: true,
       location: location,
@@ -435,7 +484,7 @@ async function processZertoLocation(location) {
       data: {
         vms: vms.length,
         vpgs: vpgs.length,
-        rpoData: rpoData.length
+        rpoData: rpoData
       }
     };
 
@@ -445,7 +494,50 @@ async function processZertoLocation(location) {
       success: false,
       location: location,
       error: error.message,
-      message: `❌ *Error mengambil data Zerto ${location.toUpperCase()}*\n\n⚠️ ${error.message}\n\n💡 Silakan coba lagi atau hubungi administrator.`
+      message: `❌ *Error Zerto Report - ${location.toUpperCase()}*\n\n⚠️ ${error.message}\n\n💡 Silakan coba lagi atau hubungi administrator.`,
+      data: {
+        vms: 0,
+        vpgs: 0,
+        rpoData: []
+      }
+    };
+  }
+}
+
+// Function to process both Zerto locations and generate combined WhatsApp message
+async function processZertoBothLocations() {
+  try {
+    console.log('Processing both Zerto locations...');
+    
+    // Process both locations in parallel
+    const [jeparaResult, jakartaResult] = await Promise.all([
+      processZertoLocation('jepara'),
+      processZertoLocation('jakarta')
+    ]);
+    
+    // Prepare data for WhatsApp message generation
+    const jeparaVms = jeparaResult.success ? jeparaResult.data.rpoData : [];
+    const jakartaVms = jakartaResult.success ? jakartaResult.data.rpoData : [];
+    
+    // Generate combined WhatsApp message
+    const whatsappMessage = generateZertoWhatsAppMessage(jeparaVms, jakartaVms);
+    
+    return {
+      success: true,
+      message: whatsappMessage,
+      data: {
+        jepara: jeparaResult,
+        jakarta: jakartaResult,
+        totalVms: jeparaVms.length + jakartaVms.length
+      }
+    };
+    
+  } catch (error) {
+    console.error('Error processing both Zerto locations:', error.message);
+    return {
+      success: false,
+      error: error.message,
+      message: `❌ *Error mengambil data Zerto*\n\n⚠️ ${error.message}\n\n💡 Silakan coba lagi atau hubungi administrator.`
     };
   }
 }
@@ -1814,38 +1906,18 @@ if (text.startsWith('/zertoreport')) {
 
       await sock.sendMessage(from, {text: `🔄 Sedang mengambil data Zerto... Mohon tunggu sebentar...`});
       
-      if (locationParam === 'jkt') {
+      if (locationParam === 'jakarta') {
           // Jakarta only
           const result = await processZertoLocation('jakarta');
           await sock.sendMessage(from, { text: result.message });
-      } else if (locationParam === 'jpr') {
+      } else if (locationParam === 'jepara') {
           // Jepara only
           const result = await processZertoLocation('jepara');
           await sock.sendMessage(from, { text: result.message });
       } else {
-          // Both locations
-          const [jakartaResult, jeparaResult] = await Promise.all([
-              processZertoLocation('jakarta'),
-              processZertoLocation('jepara')
-          ]);
-
-          // Send Jakarta report
-          await sock.sendMessage(from, { text: jakartaResult.message });
-          
-          // Send Jepara report
-          await sock.sendMessage(from, { text: jeparaResult.message });
-
-          // Send combined summary if both successful
-          if (jakartaResult.success && jeparaResult.success) {
-              const combinedSummary = `📊 *RINGKASAN GABUNGAN ZERTO*\n\n` +
-                  `🏢 Jakarta: ${jakartaResult.data.vms} VMs, ${jakartaResult.data.vpgs} VPGs\n` +
-                  `🏭 Jepara: ${jeparaResult.data.vms} VMs, ${jeparaResult.data.vpgs} VPGs\n\n` +
-                  `📈 Total VM Terproteksi: ${jakartaResult.data.vms + jeparaResult.data.vms}\n` +
-                  `🔄 Total VPG Aktif: ${jakartaResult.data.vpgs + jeparaResult.data.vpgs}\n\n` +
-                  `✅ Laporan lengkap telah dikirim untuk kedua lokasi.`;
-              
-              await sock.sendMessage(from, { text: combinedSummary });
-          }
+          // Combined report for both locations
+          const result = await processZertoBothLocations();
+          await sock.sendMessage(from, { text: result.message });
       }
   } catch (error) {
       console.error('Error in Zerto report:', error);
@@ -2066,6 +2138,220 @@ const startSock = async () => {
 console.log('Starting WhatsApp socket...');
 startSock();
 
+
+// Zerto API Endpoints
+
+// Get Zerto report for a specific location
+app.get('/zerto/:location', async (req, res) => {
+    try {
+        const location = req.params.location;
+        
+        if (!['jepara', 'jakarta', 'jpr', 'jkt'].includes(location.toLowerCase())) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid location. Use: jepara, jakarta, jpr, or jkt'
+            });
+        }
+        
+        console.log(`Processing Zerto data for location: ${location}`);
+        const result = await processZertoLocation(location);
+        
+        if (result.success) {
+            // Generate single location WhatsApp message
+            const jeparaVms = location.toLowerCase().includes('jep') ? result.data.rpoData : [];
+            const jakartaVms = location.toLowerCase().includes('jak') ? result.data.rpoData : [];
+            const whatsappMessage = generateZertoWhatsAppMessage(jeparaVms, jakartaVms);
+            
+            res.json({
+                success: true,
+                location: result.location,
+                message: whatsappMessage,
+                data: result.data
+            });
+        } else {
+            res.status(500).json({
+                success: false,
+                location: result.location,
+                error: result.error,
+                message: `❌ *Error mengambil data Zerto ${location.toUpperCase()}*\n\n⚠️ ${result.error}\n\n💡 Silakan coba lagi atau hubungi administrator.`
+            });
+        }
+        
+    } catch (error) {
+        console.error('Error in /zerto/:location endpoint:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Get Zerto report for both locations
+app.get('/zerto', async (req, res) => {
+    try {
+        console.log('Processing Zerto data for both locations');
+        const result = await processZertoBothLocations();
+        
+        res.json(result);
+        
+    } catch (error) {
+        console.error('Error in /zerto endpoint:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            message: `❌ *Error mengambil data Zerto*\n\n⚠️ ${error.message}\n\n💡 Silakan coba lagi atau hubungi administrator.`
+        });
+    }
+});
+
+// Send Zerto WhatsApp message for a specific location
+app.post('/zerto/:location/send', [
+    body('number').optional().trim(),
+    body('group').optional().trim()
+], async (req, res) => {
+    try {
+        const location = req.params.location;
+        const { number, group } = req.body;
+        
+        if (!['jepara', 'jakarta', 'jpr', 'jkt'].includes(location.toLowerCase())) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid location. Use: jepara, jakarta, jpr, or jkt'
+            });
+        }
+        
+        if (!number && !group) {
+            return res.status(400).json({
+                success: false,
+                error: 'Either number or group must be provided'
+            });
+        }
+        
+        console.log(`Processing and sending Zerto data for location: ${location}`);
+        const result = await processZertoLocation(location);
+        
+        if (!result.success) {
+            return res.status(500).json({
+                success: false,
+                location: result.location,
+                error: result.error
+            });
+        }
+        
+        // Generate single location WhatsApp message
+        const jeparaVms = location.toLowerCase().includes('jep') ? result.data.rpoData : [];
+        const jakartaVms = location.toLowerCase().includes('jak') ? result.data.rpoData : [];
+        const whatsappMessage = generateZertoWhatsAppMessage(jeparaVms, jakartaVms);
+        
+        // Send WhatsApp message
+        let sendResult;
+        if (number) {
+            const formattedNumber = phoneNumberFormatter(number);
+            const isRegistered = await checkRegisteredNumber(formattedNumber);
+            
+            if (!isRegistered) {
+                return res.status(422).json({
+                    success: false,
+                    error: 'The number is not registered'
+                });
+            }
+            
+            sendResult = await sock.sendMessage(formattedNumber, { text: whatsappMessage });
+        } else if (group) {
+            const groupObj = await findGroupByName(group);
+            if (!groupObj) {
+                return res.status(422).json({
+                    success: false,
+                    error: `No group found with name: ${group}`
+                });
+            }
+            
+            sendResult = await sock.sendMessage(groupObj.id, { text: whatsappMessage });
+        }
+        
+        res.json({
+            success: true,
+            location: result.location,
+            message: whatsappMessage,
+            data: result.data,
+            sendResult: sendResult
+        });
+        
+    } catch (error) {
+        console.error(`Error in /zerto/${req.params.location}/send endpoint:`, error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Send Zerto WhatsApp message for both locations
+app.post('/zerto/send', [
+    body('number').optional().trim(),
+    body('group').optional().trim()
+], async (req, res) => {
+    try {
+        const { number, group } = req.body;
+        
+        if (!number && !group) {
+            return res.status(400).json({
+                success: false,
+                error: 'Either number or group must be provided'
+            });
+        }
+        
+        console.log('Processing and sending Zerto data for both locations');
+        const result = await processZertoBothLocations();
+        
+        if (!result.success) {
+            return res.status(500).json({
+                success: false,
+                error: result.error
+            });
+        }
+        
+        // Send WhatsApp message
+        let sendResult;
+        if (number) {
+            const formattedNumber = phoneNumberFormatter(number);
+            const isRegistered = await checkRegisteredNumber(formattedNumber);
+            
+            if (!isRegistered) {
+                return res.status(422).json({
+                    success: false,
+                    error: 'The number is not registered'
+                });
+            }
+            
+            sendResult = await sock.sendMessage(formattedNumber, { text: result.message });
+        } else if (group) {
+            const groupObj = await findGroupByName(group);
+            if (!groupObj) {
+                return res.status(422).json({
+                    success: false,
+                    error: `No group found with name: ${group}`
+                });
+            }
+            
+            sendResult = await sock.sendMessage(groupObj.id, { text: result.message });
+        }
+        
+        res.json({
+            success: true,
+            message: result.message,
+            data: result.data,
+            sendResult: sendResult
+        });
+        
+    } catch (error) {
+        console.error('Error in /zerto/send endpoint:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
 
 app.post('/send-message', [
     body('number').trim().notEmpty().withMessage('Number cannot be empty'),
