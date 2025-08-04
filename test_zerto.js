@@ -208,32 +208,32 @@ function generateZertoWhatsAppMessage(jeparaVms, jakartaVms) {
     const statusCounts = {};
     
     vms.forEach(vm => {
-       const vmName = vm.vmName;
-       const actualRpo = vm.actualRpo || 0;  // This should now have the correct value
-       const statusCode = vm.statusCode;
-       
-       // Track maximum RPO (ensure it's a number)
-       if (typeof actualRpo === 'number' && actualRpo > maxRpo) {
-         maxRpo = actualRpo;
-       }
-       
-       // Check for RPO issues (> 15 minutes = 900 seconds)
-       if (typeof actualRpo === 'number' && actualRpo > 900) {
-         rpoIssues++;
-         const rpoMinutes = Math.round(actualRpo / 60);
-         errorDetails.push(`• ${dcName} - ${vmName}: RPO ${actualRpo} detik (>${rpoMinutes} menit)`);
-       }
-       
-       // Count status occurrences
-       const statusDesc = vm.status;
-       statusCounts[statusDesc] = (statusCounts[statusDesc] || 0) + 1;
-       
-       // Check for status issues (not MeetingSLA)
-       if (statusCode !== 1) { // 1 = MeetingSLA
-         statusIssues++;
-         errorDetails.push(`• ${dcName} - ${vmName}: Status ${statusDesc}`);
-       }
-     });
+      const vmName = vm.vmName;
+      const actualRpo = vm.actualRpo || 0;  // This should now have the correct value
+      const statusCode = vm.statusCode;
+      
+      // Track maximum RPO (ensure it's a number)
+      if (typeof actualRpo === 'number' && actualRpo > maxRpo) {
+        maxRpo = actualRpo;
+      }
+      
+      // Check for RPO issues (> 15 minutes = 900 seconds)
+      if (typeof actualRpo === 'number' && actualRpo > 900) {
+        rpoIssues++;
+        const rpoMinutes = Math.round(actualRpo / 60);
+        errorDetails.push(`• ${dcName} - ${vmName}: RPO ${actualRpo} detik (>${rpoMinutes} menit)`);
+      }
+      
+      // Count status occurrences
+      const statusDesc = vm.status;
+      statusCounts[statusDesc] = (statusCounts[statusDesc] || 0) + 1;
+      
+      // Check for status issues (not MeetingSLA)
+      if (statusCode !== 1) { // 1 = MeetingSLA
+        statusIssues++;
+        errorDetails.push(`• ${dcName} - ${vmName}: Status ${statusDesc}`);
+      }
+    });
     
     return {
       totalVms,
@@ -249,6 +249,10 @@ function generateZertoWhatsAppMessage(jeparaVms, jakartaVms) {
   const jeparaData = analyzeDcData(jeparaVms, "MINI DC Jepara");
   const jakartaData = analyzeDcData(jakartaVms, "DC Jakarta");
   
+  // Check if this is a single location test
+  const isSingleLocation = (jeparaVms.length === 0 && jakartaVms.length > 0) || 
+                          (jakartaVms.length === 0 && jeparaVms.length > 0);
+  
   // Combined totals
   const totalVms = jeparaData.totalVms + jakartaData.totalVms;
   const totalRpoIssues = jeparaData.rpoIssues + jakartaData.rpoIssues;
@@ -259,9 +263,14 @@ function generateZertoWhatsAppMessage(jeparaVms, jakartaVms) {
   // Build WhatsApp message
   let message = `${greeting}, berikut adalah laporan hasil replikasi Zerto pada hari ${formattedDate} pukul ${formattedTime}.\n\n`;
   
-  // Main status message
+  // Main status message - adjust text based on single vs combined location
   if (totalRpoIssues === 0 && totalStatusIssues === 0) {
-    message += `✅ Semua ${totalVms} server dari kedua data center memenuhi SLA dengan RPO time kurang dari 15 menit (maksimal: ${maxRpo} detik).`;
+    if (isSingleLocation) {
+      const locationName = jeparaVms.length > 0 ? "MINI DC Jepara" : "DC Jakarta";
+      message += `✅ Semua ${totalVms} server dari ${locationName} memenuhi SLA dengan RPO time kurang dari 15 menit (maksimal: ${maxRpo} detik).`;
+    } else {
+      message += `✅ Semua ${totalVms} server dari kedua data center memenuhi SLA dengan RPO time kurang dari 15 menit (maksimal: ${maxRpo} detik).`;
+    }
   } else {
     const totalIssues = totalRpoIssues + totalStatusIssues;
     message += `⚠️ Ditemukan ${totalIssues} masalah pada replikasi server:`;
@@ -281,20 +290,25 @@ function generateZertoWhatsAppMessage(jeparaVms, jakartaVms) {
     }
   }
   
-  // Add detailed breakdown per DC
+  // Add detailed breakdown per DC - only show active DCs
   message += `\n\n📊 Ringkasan per Data Center:`;
-  message += `\n🏢 MINI DC Jepara: ${jeparaData.totalVms} server`;
-  if (jeparaData.rpoIssues + jeparaData.statusIssues === 0) {
-    message += ` - ✅ Semua OK`;
-  } else {
-    message += ` - ⚠️ ${jeparaData.rpoIssues + jeparaData.statusIssues} masalah`;
+  
+  if (jeparaData.totalVms > 0) {
+    message += `\n🏢 MINI DC Jepara: ${jeparaData.totalVms} server`;
+    if (jeparaData.rpoIssues + jeparaData.statusIssues === 0) {
+      message += ` - ✅ Semua OK`;
+    } else {
+      message += ` - ⚠️ ${jeparaData.rpoIssues + jeparaData.statusIssues} masalah`;
+    }
   }
   
-  message += `\n🏢 DC Jakarta: ${jakartaData.totalVms} server`;
-  if (jakartaData.rpoIssues + jakartaData.statusIssues === 0) {
-    message += ` - ✅ Semua OK`;
-  } else {
-    message += ` - ⚠️ ${jakartaData.rpoIssues + jakartaData.statusIssues} masalah`;
+  if (jakartaData.totalVms > 0) {
+    message += `\n🏢 DC Jakarta: ${jakartaData.totalVms} server`;
+    if (jakartaData.rpoIssues + jakartaData.statusIssues === 0) {
+      message += ` - ✅ Semua OK`;
+    } else {
+      message += ` - ⚠️ ${jakartaData.rpoIssues + jakartaData.statusIssues} masalah`;
+    }
   }
   
   // Add overall summary
