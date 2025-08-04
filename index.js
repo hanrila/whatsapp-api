@@ -1,6 +1,12 @@
 ﻿// Load environment variables from .env file
 require('dotenv').config();
 
+// Configure Puppeteer cache directory to use project directory
+const path = require('path');
+const projectCacheDir = path.join(__dirname, 'puppeteer-cache');
+process.env.PUPPETEER_CACHE_DIR = projectCacheDir;
+console.log(`Setting PUPPETEER_CACHE_DIR to: ${projectCacheDir}`);
+
 const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
 //const {default: makeWASocket,AnyMessageContent, BinaryInfo, delay, DisconnectReason, encodeWAM, fetchLatestBaileysVersion, getAggregateVotesInPollMessage, makeCacheableSignalKeyStore, makeInMemoryStore, PHONENUMBER_MCC, proto, useMultiFileAuthState, WAMessageContent, WAMessageKey}= require('@whiskeysockets/baileys');
 //import { WAMessageKey, WAMessageContent, proto } from '@whiskeysockets/baileys';
@@ -8,6 +14,7 @@ const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion,
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const nodeHtmlToImage = require('node-html-to-image');
+const puppeteer = require('puppeteer');
 //const qrcode = require('qrcode-terminal');
 const qrcode = require('qrcode');
 const Pino = require('pino');
@@ -37,7 +44,6 @@ app.use(express.json()); // Middleware to parse JSON bodies
 app.use(express.urlencoded({ extended: true })); // Middleware to parse x-www-form-urlencoded bodies
 
 //Implement Socket IO
-const path = require('path');
 const server = require('http').createServer(app);
 const io = require('socket.io')(server);
 
@@ -191,6 +197,47 @@ class ZertoAPIClient {
       throw error;
     }
   }
+}
+
+// Helper function to get Chrome executable path dynamically
+function getChromeExecutablePath() {
+  const projectRoot = __dirname;
+  console.log(`Project root directory: ${projectRoot}`);
+  
+  // Try to find Chrome in puppeteer-cache directory
+  const cacheDir = path.join(projectRoot, 'puppeteer-cache', 'chrome');
+  console.log(`Looking for Chrome in cache directory: ${cacheDir}`);
+  
+  if (fs.existsSync(cacheDir)) {
+    try {
+      // Find the Chrome version directory dynamically
+      const versionDirs = fs.readdirSync(cacheDir).filter(dir => dir.startsWith('win64-'));
+      console.log(`Found Chrome version directories: ${versionDirs.join(', ')}`);
+      
+      if (versionDirs.length > 0) {
+        // Use the first (or latest) version found
+        const versionDir = versionDirs[0];
+        const chromePath = path.join(cacheDir, versionDir, 'chrome-win64', 'chrome.exe');
+        console.log(`Checking Chrome executable at: ${chromePath}`);
+        
+        if (fs.existsSync(chromePath)) {
+          console.log(`✅ Using Chrome executable at: ${chromePath}`);
+          return chromePath;
+        } else {
+          console.log(`❌ Chrome executable not found at: ${chromePath}`);
+        }
+      } else {
+        console.log('❌ No Chrome version directories found in cache');
+      }
+    } catch (error) {
+      console.error('Error reading Chrome cache directory:', error);
+    }
+  } else {
+    console.log(`❌ Chrome cache directory not found: ${cacheDir}`);
+  }
+  
+  console.log('⚠️ Chrome executable not found in puppeteer-cache, Puppeteer will try to use system Chrome');
+  return null; // Let Puppeteer use its default Chrome
 }
 
 // Helper function to get current date and time in Indonesian format
@@ -1229,52 +1276,7 @@ async function getUserDrives(upn) {
   }
 }
 
-//Zerto report
-function getCurrentDateTime() {
-  const currentDate = new Date();
-
-  // Format the current date and time
-  const formattedDateTime = currentDate.toLocaleString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: 'numeric',
-    second: 'numeric',
-    weekday: 'long',
-  });
-
-  // Get individual components of the date and time
-  const year = currentDate.getFullYear();
-  const month = currentDate.toLocaleString('id-ID', { month: 'long' });
-  const date = currentDate.getDate();
-  const day = currentDate.toLocaleString('id-ID', { weekday: 'long' });
-  const hours = currentDate.getHours().toString().padStart(2, '0'); // Ensure two digits
-  const minutes = currentDate.getMinutes().toString().padStart(2, '0'); // Ensure two digits
-
-  // Greeting based on the hour of the day
-  let greeting = '';
-  if (hours < 11) {
-    greeting = 'pagi';
-  } else if (hours >= 11 && hours < 15) {
-    greeting = 'siang';
-  } else if (hours >= 15 && hours < 18) {
-    greeting = 'sore';
-  } else {
-    greeting = 'malam';
-  }
-
-  return {
-    formattedDateTime,
-    year,
-    month,
-    date,
-    day,
-    hours,
-    minutes,
-    greeting,
-  };
-}
+// Note: getCurrentDateTime function is defined earlier in the file (line 244)
 
 // Function to generate HTML table for Zerto VM data
 function generateZertoTableHTML(vmData, location) {
@@ -1477,15 +1479,19 @@ function generateZertoTableHTML(vmData, location) {
                        const meetsSLA = rpoSeconds < 900; // 15 minutes = 900 seconds
                        const rpoClass = rpoSeconds < 300 ? 'rpo-good' : rpoSeconds < 600 ? 'rpo-warning' : 'rpo-critical';
                        
-                       // Determine VM location based on the location parameter or VM data
-                       let vmLocation = 'Unknown';
-                       if (location.includes('Jakarta') || location.includes('DC Jakarta')) {
-                         vmLocation = 'DC Jakarta';
-                       } else if (location.includes('Jepara') || location.includes('MINI DC Jepara')) {
-                         vmLocation = 'MINI DC Jepara';
-                       } else if (location.includes('&')) {
-                         // For combined reports, try to determine from VM name or use both
-                         vmLocation = vm.vmName && vm.vmName.toLowerCase().includes('jpr') ? 'MINI DC Jepara' : 'DC Jakarta';
+                       // Determine VM location from VM data or fallback to location parameter
+                       let vmLocation = vm.location || 'Unknown';
+                       
+                       // Fallback logic if location is not in VM data
+                       if (vmLocation === 'Unknown') {
+                         if (location.includes('Jakarta') || location.includes('DC Jakarta')) {
+                           vmLocation = 'DC Jakarta';
+                         } else if (location.includes('Jepara') || location.includes('MINI DC Jepara')) {
+                           vmLocation = 'MINI DC Jepara';
+                         } else if (location.includes('&')) {
+                           // For combined reports, try to determine from VM name
+                           vmLocation = vm.vmName && vm.vmName.toLowerCase().includes('jpr') ? 'MINI DC Jepara' : 'DC Jakarta';
+                         }
                        }
                        
                        return `
@@ -1506,7 +1512,7 @@ function generateZertoTableHTML(vmData, location) {
         </div>
         
         <div class="footer">
-            🤖 Generated by NOA WhatsApp API • Zerto Protection Report System
+            🤖 Generated by Systex Asia WhatsApp API • Zerto Protection Report System
         </div>
     </div>
 </body>
@@ -1566,9 +1572,9 @@ function generateTableCaption(vmData, locationName) {
   
   // Add breakdown per data center for combined reports
   if (isCombined) {
-    // Count VMs per location (simplified logic)
-    const jeparaVms = vmData.filter(vm => vm.vmName && vm.vmName.toLowerCase().includes('jpr')).length;
-    const jakartaVms = totalVms - jeparaVms;
+    // Count VMs per location using the location property
+    const jeparaVms = vmData.filter(vm => vm.location && vm.location.includes('MINI DC Jepara')).length;
+    const jakartaVms = vmData.filter(vm => vm.location && vm.location.includes('DC Jakarta')).length;
     
     message += `📊 Ringkasan per Data Center:\n`;
     if (jeparaVms > 0) {
@@ -1594,13 +1600,21 @@ async function captureTableAsImage(htmlContent) {
   try {
     console.log('Generating table image...');
     
+    const chromePath = getChromeExecutablePath();
+    const puppeteerConfig = {
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    };
+    
+    // Only add executablePath if Chrome is found in puppeteer-cache
+    if (chromePath) {
+      puppeteerConfig.executablePath = chromePath;
+    }
+    
     const image = await nodeHtmlToImage({
       html: htmlContent,
       quality: 100,
       type: 'png',
-      puppeteerArgs: {
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-      },
+      puppeteerArgs: puppeteerConfig,
       encoding: 'buffer'
     });
 
@@ -1616,12 +1630,19 @@ async function captureTableAsImage(htmlContent) {
 async function captureZertoWithLogin(zertoUrl) {
   try {
       console.log(`Launching browser...`);
-      const browser = await puppeteer.launch({
-        executablePath: 'C:\\Users\\administrator.PT-BJP\\.cache\\puppeteer\\chrome\\win64-125.0.6422.78\\chrome-win64\\chrome.exe',
+      const chromePath = getChromeExecutablePath();
+      const launchConfig = {
           headless: false,
           ignoreHTTPSErrors: true,
           args: ['--disable-gpu', '--disable-software-rasterizer'],
-      });
+      };
+      
+      // Only add executablePath if Chrome is found in puppeteer-cache
+      if (chromePath) {
+          launchConfig.executablePath = chromePath;
+      }
+      
+      const browser = await puppeteer.launch(launchConfig);
 
       const page = await browser.newPage();
 
@@ -1700,11 +1721,11 @@ async function captureZertoWithLogin(zertoUrl) {
 
 // Function to generate a summary prompt
 function generateSummaryPrompt(dateTimeInfo) {
-  const { greeting, day, date, month, year, hours, minutes } = dateTimeInfo;
+  const { formattedDate, formattedTime } = dateTimeInfo;
 
   // Using a multiline template string
   const prompt = `
-  buatkan summary singkat laporan hasil replikasi Zerto. awali dengan Selamat ${greeting} team, sebutkan hari ${day}, ${date} ${month} ${year} pukul ${hours}:${minutes}.
+  buatkan summary singkat laporan hasil replikasi Zerto. awali dengan Selamat pagi team, sebutkan hari ${formattedDate} pukul ${formattedTime}.
   Urutan data adalah: Server Name, VPG Name, Undefined, Peer Site, SLA Status dan RPO Time.
   Sebutkan Zerto Site.
   Rule: 
@@ -1788,9 +1809,9 @@ const handleMessage = async (message) => {
       category: 'Resource Management'
     },
     zertoreport: {
-      usage: '/zertoreport [location] [/cp]',
-      description: 'Generate Zerto report (jakarta=DC, jepara=Mini DC). Add /cp for professional table image',
-      example: '/zertoreport jakarta /cp',
+      usage: '/zertoreport [location] [/txt]',
+      description: 'Generate Zerto report (jakarta=DC, jepara=Mini DC). Default: professional table image. Add /txt for text report',
+      example: '/zertoreport jakarta',
       category: 'System Information'
     },
     sp: {
@@ -2243,28 +2264,48 @@ if (text.startsWith('/zertoreport')) {
   try {
       const params = text.split(' ');
       const locationParam = params[1];
-      const cpParam = params.find(param => param === '/cp');
+      const txtParam = params.find(param => param === '/txt');
 
-      await sock.sendMessage(from, {text: `🔄 Sedang mengambil data Zerto... Mohon tunggu sebentar...`});
+      await sock.sendMessage(from, {text: `🔄 Collecting Zerto data... Please wait...`});
       
-      if (cpParam) {
-          // Generate professional table report as formatted text
+      if (txtParam) {
+          // Generate text report only
+          if (locationParam === 'jakarta') {
+              // Jakarta only
+              const result = await processZertoLocation('jakarta');
+              await sock.sendMessage(from, { text: result.message });
+          } else if (locationParam === 'jepara') {
+              // Jepara only
+              const result = await processZertoLocation('jepara');
+              await sock.sendMessage(from, { text: result.message });
+          } else {
+              // Combined report for both locations
+              const result = await processZertoBothLocations();
+              await sock.sendMessage(from, { text: result.message });
+          }
+      } else {
+          // Default: Generate professional table image
           let vmData = [];
           let locationName = '';
           
           if (locationParam === 'jakarta') {
               const result = await processZertoLocation('jakarta');
-              vmData = result.vmData || [];
+              vmData = (result.vmData || []).map(vm => ({...vm, location: 'DC Jakarta'}));
               locationName = 'DC Jakarta';
           } else if (locationParam === 'jepara') {
               const result = await processZertoLocation('jepara');
-              vmData = result.vmData || [];
+              vmData = (result.vmData || []).map(vm => ({...vm, location: 'MINI DC Jepara'}));
               locationName = 'MINI DC Jepara';
           } else {
               // Combined data from both locations
               const jakartaResult = await processZertoLocation('jakarta');
               const jeparaResult = await processZertoLocation('jepara');
-              vmData = [...(jakartaResult.vmData || []), ...(jeparaResult.vmData || [])];
+              
+              // Add location information to each VM
+              const jakartaVMs = (jakartaResult.vmData || []).map(vm => ({...vm, location: 'DC Jakarta'}));
+              const jeparaVMs = (jeparaResult.vmData || []).map(vm => ({...vm, location: 'MINI DC Jepara'}));
+              
+              vmData = [...jakartaVMs, ...jeparaVMs];
               locationName = 'DC Jakarta & MINI DC Jepara';
           }
 
@@ -2285,22 +2326,6 @@ if (text.startsWith('/zertoreport')) {
             image: imageBuffer,
             caption: caption
           });
-          
-      } else {
-          // Regular text report
-          if (locationParam === 'jakarta') {
-              // Jakarta only
-              const result = await processZertoLocation('jakarta');
-              await sock.sendMessage(from, { text: result.message });
-          } else if (locationParam === 'jepara') {
-              // Jepara only
-              const result = await processZertoLocation('jepara');
-              await sock.sendMessage(from, { text: result.message });
-          } else {
-              // Combined report for both locations
-              const result = await processZertoBothLocations();
-              await sock.sendMessage(from, { text: result.message });
-          }
       }
   } catch (error) {
       console.error('Error in Zerto report:', error);
@@ -2455,7 +2480,7 @@ const startSock = async () => {
         
                 // Test sending a message after connection is established
                 const testNumber = phoneNumberFormatter('08995549933');
-                const testMessage = 'NOA Whatsapp API Started!';
+                const testMessage = 'Systex Asia Whatsapp API Started!';
                 console.log('Testing sendMessage with number:', testNumber);
                 try {
                     const response = await sock.sendMessage(testNumber, { text: testMessage });
