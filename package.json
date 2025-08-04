@@ -20,6 +20,7 @@
     "express": "^5.1.0",
     "express-validator": "^7.2.1",
     "mime-types": "^3.0.1",
+    "node-html-to-image": "^5.0.0",
     "node-routeros": "^1.6.8",
     "openai": "^5.10.2",
     "pino": "^9.7.0",

@@ -7,7 +7,7 @@ const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion,
 
 const express = require('express');
 const { body, validationResult } = require('express-validator');
-const puppeteer = require('puppeteer');
+const nodeHtmlToImage = require('node-html-to-image');
 //const qrcode = require('qrcode-terminal');
 const qrcode = require('qrcode');
 const Pino = require('pino');
@@ -481,6 +481,7 @@ async function processZertoLocation(location) {
       success: true,
       location: location,
       message: whatsappMessage,
+      vmData: rpoData, // Add vmData for table generation
       data: {
         vms: vms.length,
         vpgs: vpgs.length,
@@ -495,6 +496,7 @@ async function processZertoLocation(location) {
       location: location,
       error: error.message,
       message: `❌ *Error Zerto Report - ${location.toUpperCase()}*\n\n⚠️ ${error.message}\n\n💡 Silakan coba lagi atau hubungi administrator.`,
+      vmData: [], // Add empty vmData for error case
       data: {
         vms: 0,
         vpgs: 0,
@@ -1274,6 +1276,343 @@ function getCurrentDateTime() {
   };
 }
 
+// Function to generate HTML table for Zerto VM data
+function generateZertoTableHTML(vmData, location) {
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Zerto VM Report - ${location}</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            text-align: center;
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            color: white;
+            padding: 30px;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 32px;
+            font-weight: 700;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        .header p {
+            margin: 10px 0 0 0;
+            font-size: 18px;
+            opacity: 0.9;
+        }
+        .table-container {
+            padding: 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        th {
+            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+            color: white;
+            padding: 18px 15px;
+            text-align: center;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-size: 13px;
+            border-bottom: 3px solid #2980b9;
+        }
+        td {
+            padding: 15px;
+            border-bottom: 1px solid #ecf0f1;
+            vertical-align: middle;
+            text-align: center;
+        }
+        tr:nth-child(even) {
+            background-color: #f8f9fa;
+        }
+        tr:hover {
+            background-color: #e8f4fd;
+            transition: background-color 0.3s ease;
+        }
+        .status-meet {
+            background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 25px;
+            font-weight: 700;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            box-shadow: 0 2px 4px rgba(39, 174, 96, 0.3);
+        }
+        .status-not-meet {
+            background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 25px;
+            font-weight: 700;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            box-shadow: 0 2px 4px rgba(231, 76, 60, 0.3);
+        }
+        .rpo-good {
+            color: #27ae60;
+            font-weight: 700;
+            font-size: 16px;
+        }
+        .rpo-warning {
+            color: #f39c12;
+            font-weight: 700;
+            font-size: 16px;
+        }
+        .rpo-critical {
+            color: #e74c3c;
+            font-weight: 700;
+            font-size: 16px;
+        }
+        .vm-name {
+            font-weight: 700;
+            color: #2c3e50;
+            font-size: 15px;
+        }
+        .vm-location {
+            background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 15px;
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .footer {
+            text-align: center;
+            padding: 25px;
+            background: linear-gradient(135deg, #34495e 0%, #2c3e50 100%);
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .summary {
+            display: flex;
+            justify-content: space-around;
+            padding: 20px;
+            background: #ecf0f1;
+            margin: 0;
+        }
+        .summary-item {
+            text-align: center;
+        }
+        .summary-number {
+            font-size: 24px;
+            font-weight: 700;
+            color: #2c3e50;
+        }
+        .summary-label {
+            font-size: 12px;
+            color: #7f8c8d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🛡️ Zerto VM Protection Report</h1>
+            <p>📍 ${location} • 📅 ${new Date().toLocaleString('id-ID', { 
+              timeZone: 'Asia/Jakarta',
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            })}</p>
+        </div>
+        
+        <div class="summary">
+            <div class="summary-item">
+                <div class="summary-number">${vmData.length}</div>
+                <div class="summary-label">Total VMs</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-number" style="color: #27ae60;">${vmData.filter(vm => (vm.actualRpo || 0) < 900).length}</div>
+                <div class="summary-label">SLA Met</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-number" style="color: #e74c3c;">${vmData.filter(vm => (vm.actualRpo || 0) >= 900).length}</div>
+                <div class="summary-label">SLA Not Met</div>
+            </div>
+        </div>
+        
+        <div class="table-container">
+            <table>
+                 <thead>
+                     <tr>
+                         <th>VM Name</th>
+                         <th>VM Location</th>
+                         <th>RPO Time</th>
+                         <th>SLA Status</th>
+                     </tr>
+                 </thead>
+                 <tbody>
+                     ${vmData.map(vm => {
+                       const rpoSeconds = vm.actualRpo || 0;
+                       const meetsSLA = rpoSeconds < 900; // 15 minutes = 900 seconds
+                       const rpoClass = rpoSeconds < 300 ? 'rpo-good' : rpoSeconds < 600 ? 'rpo-warning' : 'rpo-critical';
+                       
+                       // Determine VM location based on the location parameter or VM data
+                       let vmLocation = 'Unknown';
+                       if (location.includes('Jakarta') || location.includes('DC Jakarta')) {
+                         vmLocation = 'DC Jakarta';
+                       } else if (location.includes('Jepara') || location.includes('MINI DC Jepara')) {
+                         vmLocation = 'MINI DC Jepara';
+                       } else if (location.includes('&')) {
+                         // For combined reports, try to determine from VM name or use both
+                         vmLocation = vm.vmName && vm.vmName.toLowerCase().includes('jpr') ? 'MINI DC Jepara' : 'DC Jakarta';
+                       }
+                       
+                       return `
+                         <tr>
+                             <td class="vm-name">${vm.vmName || 'N/A'}</td>
+                             <td><span class="vm-location">${vmLocation}</span></td>
+                             <td class="${rpoClass}">${rpoSeconds}s</td>
+                             <td>
+                                 <span class="${meetsSLA ? 'status-meet' : 'status-not-meet'}">
+                                     ${meetsSLA ? '✅ MEET SLA' : '❌ NOT MEET'}
+                                 </span>
+                             </td>
+                         </tr>
+                       `;
+                     }).join('')}
+                 </tbody>
+             </table>
+        </div>
+        
+        <div class="footer">
+            🤖 Generated by NOA WhatsApp API • Zerto Protection Report System
+        </div>
+    </div>
+</body>
+</html>`;
+  
+  return html;
+}
+
+// Function to generate WhatsApp caption for table image
+function generateTableCaption(vmData, locationName) {
+  const { formattedDate, formattedTime } = getCurrentDateTime();
+  const now = new Date();
+  
+  // Smart greeting based on time windows
+  let greeting;
+  if (now.getHours() < 10) {
+    greeting = "Selamat pagi Team";
+  } else if (now.getHours() >= 10 && now.getHours() < 15) {
+    greeting = "Selamat siang Team";
+  } else if (now.getHours() >= 15 && now.getHours() < 18) {
+    greeting = "Selamat sore Team";
+  } else {
+    greeting = "Selamat malam Team";
+  }
+  
+  // Analyze VM data
+  const totalVms = vmData.length;
+  let rpoIssues = 0;
+  let maxRpo = 0;
+  
+  vmData.forEach(vm => {
+    const actualRpo = vm.actualRpo || 0;
+    if (typeof actualRpo === 'number' && actualRpo > maxRpo) {
+      maxRpo = actualRpo;
+    }
+    if (typeof actualRpo === 'number' && actualRpo > 900) {
+      rpoIssues++;
+    }
+  });
+  
+  // Determine if this is combined locations
+  const isCombined = locationName.includes('&') || locationName.includes('All Locations');
+  
+  // Build caption message
+  let message = `${greeting}, berikut adalah laporan hasil replikasi Zerto pada hari ${formattedDate} pukul ${formattedTime}.\n\n`;
+  
+  // Main status message
+  if (rpoIssues === 0) {
+    if (isCombined) {
+      message += `✅ Semua ${totalVms} server dari kedua data center memenuhi SLA dengan RPO time kurang dari 15 menit (maksimal: ${maxRpo} detik).\n\n`;
+    } else {
+      message += `✅ Semua ${totalVms} server dari ${locationName} memenuhi SLA dengan RPO time kurang dari 15 menit (maksimal: ${maxRpo} detik).\n\n`;
+    }
+  } else {
+    message += `⚠️ Ditemukan ${rpoIssues} server dengan RPO > 15 menit dari total ${totalVms} server.\n\n`;
+  }
+  
+  // Add breakdown per data center for combined reports
+  if (isCombined) {
+    // Count VMs per location (simplified logic)
+    const jeparaVms = vmData.filter(vm => vm.vmName && vm.vmName.toLowerCase().includes('jpr')).length;
+    const jakartaVms = totalVms - jeparaVms;
+    
+    message += `📊 Ringkasan per Data Center:\n`;
+    if (jeparaVms > 0) {
+      message += `🏢 MINI DC Jepara: ${jeparaVms} server - ✅ Semua OK\n`;
+    }
+    if (jakartaVms > 0) {
+      message += `🏢 DC Jakarta: ${jakartaVms} server - ✅ Semua OK\n`;
+    }
+    message += `\n`;
+  }
+  
+  // Add overall summary
+  message += `📈 Total Keseluruhan:\n`;
+  message += `• Total Server: ${totalVms}\n`;
+  message += `• RPO Maksimal: ${maxRpo} detik\n`;
+  message += `• Server Bermasalah: ${rpoIssues}`;
+  
+  return message;
+}
+
+// Function to capture HTML table as image using node-html-to-image
+async function captureTableAsImage(htmlContent) {
+  try {
+    console.log('Generating table image...');
+    
+    const image = await nodeHtmlToImage({
+      html: htmlContent,
+      quality: 100,
+      type: 'png',
+      puppeteerArgs: {
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+      },
+      encoding: 'buffer'
+    });
+
+    console.log('Table image generated successfully');
+    return image;
+    
+  } catch (error) {
+    console.error('Error generating table image:', error);
+    throw error;
+  }
+}
+
 async function captureZertoWithLogin(zertoUrl) {
   try {
       console.log(`Launching browser...`);
@@ -1449,9 +1788,9 @@ const handleMessage = async (message) => {
       category: 'Resource Management'
     },
     zertoreport: {
-      usage: '/zertoreport [location]',
-      description: 'Generate Zerto report (jkt=DC, jpr=Mini DC)',
-      example: '/zertoreport jkt',
+      usage: '/zertoreport [location] [/cp]',
+      description: 'Generate Zerto report (jakarta=DC, jepara=Mini DC). Add /cp for professional table image',
+      example: '/zertoreport jakarta /cp',
       category: 'System Information'
     },
     sp: {
@@ -1902,22 +2241,66 @@ const handleMessage = async (message) => {
 }
 if (text.startsWith('/zertoreport')) {
   try {
-      const locationParam = text.split(' ')[1];
+      const params = text.split(' ');
+      const locationParam = params[1];
+      const cpParam = params.find(param => param === '/cp');
 
       await sock.sendMessage(from, {text: `🔄 Sedang mengambil data Zerto... Mohon tunggu sebentar...`});
       
-      if (locationParam === 'jakarta') {
-          // Jakarta only
-          const result = await processZertoLocation('jakarta');
-          await sock.sendMessage(from, { text: result.message });
-      } else if (locationParam === 'jepara') {
-          // Jepara only
-          const result = await processZertoLocation('jepara');
-          await sock.sendMessage(from, { text: result.message });
+      if (cpParam) {
+          // Generate professional table report as formatted text
+          let vmData = [];
+          let locationName = '';
+          
+          if (locationParam === 'jakarta') {
+              const result = await processZertoLocation('jakarta');
+              vmData = result.vmData || [];
+              locationName = 'DC Jakarta';
+          } else if (locationParam === 'jepara') {
+              const result = await processZertoLocation('jepara');
+              vmData = result.vmData || [];
+              locationName = 'MINI DC Jepara';
+          } else {
+              // Combined data from both locations
+              const jakartaResult = await processZertoLocation('jakarta');
+              const jeparaResult = await processZertoLocation('jepara');
+              vmData = [...(jakartaResult.vmData || []), ...(jeparaResult.vmData || [])];
+              locationName = 'DC Jakarta & MINI DC Jepara';
+          }
+
+          if (vmData.length === 0) {
+              await sock.sendMessage(from, { text: `❌ *No VM Data Found*\n\nTidak ada data VM yang ditemukan untuk lokasi yang diminta.` });
+              return;
+          }
+
+          // Generate HTML table and capture as image
+          const htmlTable = generateZertoTableHTML(vmData, locationName);
+          const imageBuffer = await captureTableAsImage(htmlTable);
+          
+          // Generate proper WhatsApp message caption
+          const caption = generateTableCaption(vmData, locationName);
+          
+          // Send image with WhatsApp message format caption
+          await sock.sendMessage(from, {
+            image: imageBuffer,
+            caption: caption
+          });
+          
       } else {
-          // Combined report for both locations
-          const result = await processZertoBothLocations();
-          await sock.sendMessage(from, { text: result.message });
+          // Regular text report
+          if (locationParam === 'jakarta') {
+              // Jakarta only
+              const result = await processZertoLocation('jakarta');
+              await sock.sendMessage(from, { text: result.message });
+          } else if (locationParam === 'jepara') {
+              // Jepara only
+              const result = await processZertoLocation('jepara');
+              await sock.sendMessage(from, { text: result.message });
+          } else {
+              // Combined report for both locations
+              const result = await processZertoBothLocations();
+              await sock.sendMessage(from, { text: result.message });
+          }
       }
   } catch (error) {
       console.error('Error in Zerto report:', error);
