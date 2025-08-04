@@ -141,14 +141,17 @@ function generateRpoReport(vms, vpgs) {
       const statusCode = vm.Status;
       const statusDescription = getStatusDescription(statusCode);
       
+      // Use ActualRPO directly from the API response (like Python script)
+      const actualRpo = vm.ActualRPO || 0;
+      
       rpoData.push({
         vmName: vm.VmName,
         vpgName: vpg.VpgName,
-        rpoInSeconds: vm.RpoInSeconds || 0,
+        rpoInSeconds: actualRpo,  // Keep for backward compatibility
         status: statusDescription,
         statusCode: statusCode,
         lastTest: vm.LastTest || 'N/A',
-        actualRpo: vm.ActualRpo || 0
+        actualRpo: actualRpo     // This is the correct field name from API
       });
     }
   });
@@ -205,30 +208,32 @@ function generateZertoWhatsAppMessage(jeparaVms, jakartaVms) {
     const statusCounts = {};
     
     vms.forEach(vm => {
-      const vmName = vm.vmName;
-      const actualRpo = vm.actualRpo || 0;
-      const statusCode = vm.statusCode;
-      
-      // Track maximum RPO
-      maxRpo = Math.max(maxRpo, actualRpo);
-      
-      // Check for RPO issues (> 15 minutes = 900 seconds)
-      if (actualRpo > 900) {
-        rpoIssues++;
-        const rpoMinutes = Math.round(actualRpo / 60);
-        errorDetails.push(`• ${dcName} - ${vmName}: RPO ${actualRpo} detik (>${rpoMinutes} menit)`);
-      }
-      
-      // Count status occurrences
-      const statusDesc = vm.status;
-      statusCounts[statusDesc] = (statusCounts[statusDesc] || 0) + 1;
-      
-      // Check for status issues (not MeetingSLA)
-      if (statusCode !== 1) { // 1 = MeetingSLA
-        statusIssues++;
-        errorDetails.push(`• ${dcName} - ${vmName}: Status ${statusDesc}`);
-      }
-    });
+       const vmName = vm.vmName;
+       const actualRpo = vm.actualRpo || 0;  // This should now have the correct value
+       const statusCode = vm.statusCode;
+       
+       // Track maximum RPO (ensure it's a number)
+       if (typeof actualRpo === 'number' && actualRpo > maxRpo) {
+         maxRpo = actualRpo;
+       }
+       
+       // Check for RPO issues (> 15 minutes = 900 seconds)
+       if (typeof actualRpo === 'number' && actualRpo > 900) {
+         rpoIssues++;
+         const rpoMinutes = Math.round(actualRpo / 60);
+         errorDetails.push(`• ${dcName} - ${vmName}: RPO ${actualRpo} detik (>${rpoMinutes} menit)`);
+       }
+       
+       // Count status occurrences
+       const statusDesc = vm.status;
+       statusCounts[statusDesc] = (statusCounts[statusDesc] || 0) + 1;
+       
+       // Check for status issues (not MeetingSLA)
+       if (statusCode !== 1) { // 1 = MeetingSLA
+         statusIssues++;
+         errorDetails.push(`• ${dcName} - ${vmName}: Status ${statusDesc}`);
+       }
+     });
     
     return {
       totalVms,
@@ -301,17 +306,117 @@ function generateZertoWhatsAppMessage(jeparaVms, jakartaVms) {
   return message;
 }
 
-// Function to simulate WhatsApp message sending
-function simulateWhatsAppMessage(rpoData, location) {
-  const message = generateZertoWhatsAppMessage(rpoData, location);
+// Function to simulate WhatsApp message display (for both locations)
+async function simulateWhatsAppMessage() {
+  console.log('\n' + '📱'.repeat(40));
+  console.log('📱 SIMULATED WHATSAPP MESSAGE (BOTH LOCATIONS)');
+  console.log('📱'.repeat(40));
   
+  try {
+    // Get data from both locations
+    const jeparaClient = new ZertoAPIClient(
+      process.env.ZERTO_JEPARA_BASE_URL,
+      process.env.ZERTO_JEPARA_CLIENT_ID,
+      process.env.ZERTO_JEPARA_USERNAME,
+      process.env.ZERTO_JEPARA_PASSWORD
+    );
+    
+    const jakartaClient = new ZertoAPIClient(
+      process.env.ZERTO_JAKARTA_BASE_URL,
+      process.env.ZERTO_JAKARTA_CLIENT_ID,
+      process.env.ZERTO_JAKARTA_USERNAME,
+      process.env.ZERTO_JAKARTA_PASSWORD
+    );
+    
+    // Authenticate both clients
+    await jeparaClient.authenticate();
+    await jakartaClient.authenticate();
+    
+    // Get data from both locations
+    const [jeparaVms, jeparaVpgs] = await Promise.all([
+      jeparaClient.getVMs(),
+      jeparaClient.getVpgs()
+    ]);
+    
+    const [jakartaVms, jakartaVpgs] = await Promise.all([
+      jakartaClient.getVMs(),
+      jakartaClient.getVpgs()
+    ]);
+    
+    // Generate RPO data for both locations
+    const jeparaRpoData = generateRpoReport(jeparaVms, jeparaVpgs);
+    const jakartaRpoData = generateRpoReport(jakartaVms, jakartaVpgs);
+    
+    // Generate the combined WhatsApp message
+    const message = generateZertoWhatsAppMessage(jeparaRpoData, jakartaRpoData);
+    console.log('\n' + message);
+    
+    console.log('\n' + '📱'.repeat(40));
+    console.log('📱 END OF WHATSAPP MESSAGE');
+    console.log('📱'.repeat(40));
+    
+  } catch (error) {
+    console.error('❌ Error in WhatsApp message simulation:', error.message);
+  }
+}
+
+// Function to simulate WhatsApp message for single location
+async function simulateWhatsAppMessageSingle(location) {
   console.log('\n' + '📱'.repeat(40));
-  console.log('📱 SIMULATED WHATSAPP MESSAGE');
+  console.log(`📱 SIMULATED WHATSAPP MESSAGE (${location.toUpperCase()})`);
   console.log('📱'.repeat(40));
-  console.log('\n' + message);
-  console.log('\n' + '📱'.repeat(40));
-  console.log('📱 END OF WHATSAPP MESSAGE');
-  console.log('📱'.repeat(40));
+  
+  try {
+    let rpoData = [];
+    
+    if (location === 'jepara') {
+      const client = new ZertoAPIClient(
+        process.env.ZERTO_JEPARA_BASE_URL,
+        process.env.ZERTO_JEPARA_CLIENT_ID,
+        process.env.ZERTO_JEPARA_USERNAME,
+        process.env.ZERTO_JEPARA_PASSWORD
+      );
+      
+      await client.authenticate();
+      const [vms, vpgs] = await Promise.all([
+        client.getVMs(),
+        client.getVpgs()
+      ]);
+      
+      rpoData = generateRpoReport(vms, vpgs);
+      
+      // For single location, create empty data for the other location
+      const message = generateZertoWhatsAppMessage(rpoData, []);
+      console.log('\n' + message);
+      
+    } else if (location === 'jakarta') {
+      const client = new ZertoAPIClient(
+        process.env.ZERTO_JAKARTA_BASE_URL,
+        process.env.ZERTO_JAKARTA_CLIENT_ID,
+        process.env.ZERTO_JAKARTA_USERNAME,
+        process.env.ZERTO_JAKARTA_PASSWORD
+      );
+      
+      await client.authenticate();
+      const [vms, vpgs] = await Promise.all([
+        client.getVMs(),
+        client.getVpgs()
+      ]);
+      
+      rpoData = generateRpoReport(vms, vpgs);
+      
+      // For single location, create empty data for the other location
+      const message = generateZertoWhatsAppMessage([], rpoData);
+      console.log('\n' + message);
+    }
+    
+    console.log('\n' + '📱'.repeat(40));
+    console.log('📱 END OF WHATSAPP MESSAGE');
+    console.log('📱'.repeat(40));
+    
+  } catch (error) {
+    console.error('❌ Error in WhatsApp message simulation:', error.message);
+  }
 }
 
 // Function to display detailed report
@@ -436,9 +541,9 @@ async function testZertoLocation(location) {
     // Generate and display report
     const rpoData = generateRpoReport(vms, vpgs);
     displayDetailedReport(rpoData, location);
-    
-    // Simulate WhatsApp message
-    simulateWhatsAppMessage(rpoData, location);
+
+    // Simulate WhatsApp message for single location
+    await simulateWhatsAppMessageSingle(location.toLowerCase());
 
     return {
       success: true,
@@ -492,6 +597,9 @@ async function main() {
         console.log(`   Error: ${result.error}`);
       }
     });
+    
+    // Simulate combined WhatsApp message (like Python script)
+    await simulateWhatsAppMessage();
   } else {
     await testZertoLocation(location);
   }
