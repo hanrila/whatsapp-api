@@ -1,4 +1,7 @@
-﻿const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
+﻿// Load environment variables from .env file
+require('dotenv').config();
+
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
 //const {default: makeWASocket,AnyMessageContent, BinaryInfo, delay, DisconnectReason, encodeWAM, fetchLatestBaileysVersion, getAggregateVotesInPollMessage, makeCacheableSignalKeyStore, makeInMemoryStore, PHONENUMBER_MCC, proto, useMultiFileAuthState, WAMessageContent, WAMessageKey}= require('@whiskeysockets/baileys');
 //import { WAMessageKey, WAMessageContent, proto } from '@whiskeysockets/baileys';
 
@@ -43,6 +46,7 @@ const ExcelJS = require('exceljs');
 const fs = require('fs');
 const { downloadContentFromMessage, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const mime = require('mime-types');
+const https = require('https');
 
 
 // Serve the index.html file
@@ -95,6 +99,354 @@ async function answerAI(prompt) {
   } catch (error) {
     console.error(error);
     throw new Error("Error processing AI chat completion: " + error.message);
+  }
+}
+
+// Zerto API Client Class
+class ZertoAPIClient {
+  constructor(baseUrl, clientId, username, password) {
+    this.baseUrl = baseUrl;
+    this.clientId = clientId;
+    this.username = username;
+    this.password = password;
+    this.accessToken = null;
+    
+    // Create axios instance with SSL verification disabled
+    this.axiosInstance = axios.create({
+      httpsAgent: new https.Agent({
+        rejectUnauthorized: false
+      }),
+      timeout: 30000
+    });
+  }
+
+  async authenticate() {
+    try {
+      const authUrl = `${this.baseUrl}/auth/realms/zerto/protocol/openid-connect/token`;
+      const authData = new URLSearchParams({
+        grant_type: 'password',
+        client_id: this.clientId,
+        username: this.username,
+        password: this.password,
+        scope: 'openid'
+      });
+
+      const response = await this.axiosInstance.post(authUrl, authData, {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
+      });
+
+      this.accessToken = response.data.access_token;
+      console.log('Zerto authentication successful');
+      return true;
+    } catch (error) {
+      console.error('Zerto authentication failed:', error.message);
+      if (error.response) {
+        console.error(`Response status: ${error.response.status}`);
+        console.error(`Response data: ${JSON.stringify(error.response.data)}`);
+      }
+      return false;
+    }
+  }
+
+  async getVMs() {
+    if (!this.accessToken) {
+      throw new Error('Not authenticated. Call authenticate() first.');
+    }
+
+    try {
+      const vmsUrl = `${this.baseUrl}/v1/vms`;
+      const response = await this.axiosInstance.get(vmsUrl, {
+        headers: {
+          'Authorization': `Bearer ${this.accessToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      return response.data;
+    } catch (error) {
+      console.error('Failed to get VMs:', error.message);
+      throw error;
+    }
+  }
+
+  async getVpgs() {
+    if (!this.accessToken) {
+      throw new Error('Not authenticated. Call authenticate() first.');
+    }
+
+    try {
+      const vpgsUrl = `${this.baseUrl}/v1/vpgs`;
+      const response = await this.axiosInstance.get(vpgsUrl, {
+        headers: {
+          'Authorization': `Bearer ${this.accessToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      return response.data;
+    } catch (error) {
+      console.error('Failed to get VPGs:', error.message);
+      throw error;
+    }
+  }
+}
+
+// Helper function to get current date and time in Indonesian format
+function getCurrentDateTime() {
+  const now = new Date();
+  
+  // Convert to Jakarta timezone
+  const jakartaTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Jakarta"}));
+  
+  const day = jakartaTime.getDate().toString().padStart(2, '0');
+  const month = jakartaTime.getMonth() + 1; // getMonth() returns 0-11
+  const year = jakartaTime.getFullYear();
+  const hours = jakartaTime.getHours().toString().padStart(2, '0');
+  const minutes = jakartaTime.getMinutes().toString().padStart(2, '0');
+  const seconds = jakartaTime.getSeconds().toString().padStart(2, '0');
+  
+  const monthNames = [
+    'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+    'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+  ];
+  
+  return `${day} ${monthNames[month - 1]} ${year}, ${hours}:${minutes}:${seconds} WIB`;
+}
+
+// Helper function to get smart greeting based on time
+function getSmartGreeting() {
+  const now = new Date();
+  const hour = now.getHours();
+  
+  if (hour >= 5 && hour < 12) {
+    return "Selamat pagi";
+  } else if (hour >= 12 && hour < 15) {
+    return "Selamat siang";
+  } else if (hour >= 15 && hour < 18) {
+    return "Selamat sore";
+  } else {
+    return "Selamat malam";
+  }
+}
+
+// Helper function to convert Zerto status code to human-readable description
+function getStatusDescription(statusCode) {
+  const statusMapping = {
+    0: "Initializing",
+    1: "MeetingSLA", 
+    2: "NotMeetingSLA",
+    3: "RpoNotMeetingSLA",
+    4: "HistoryNotMeetingSLA",
+    5: "FailingOver",
+    6: "Moving",
+    7: "Deleting",
+    8: "Recovered"
+  };
+  
+  if (typeof statusCode === 'number') {
+    return statusMapping[statusCode] || `Unknown(${statusCode})`;
+  }
+  return String(statusCode || 'Unknown');
+}
+
+// Function to generate RPO report
+function generateRpoReport(vms, vpgs) {
+  const vmMap = new Map();
+  vms.forEach(vm => {
+    vmMap.set(vm.VmIdentifier, vm);
+  });
+
+  const vpgMap = new Map();
+  vpgs.forEach(vpg => {
+    vpgMap.set(vpg.VpgIdentifier, vpg);
+  });
+
+  const rpoData = [];
+  
+  vms.forEach(vm => {
+    const vpg = vpgMap.get(vm.VpgIdentifier);
+    if (vpg) {
+      const statusCode = vm.Status;
+      const statusDescription = getStatusDescription(statusCode);
+      
+      rpoData.push({
+        vmName: vm.VmName,
+        vpgName: vpg.VpgName,
+        rpoInSeconds: vm.RpoInSeconds || 0,
+        status: statusDescription,
+        statusCode: statusCode,
+        lastTest: vm.LastTest || 'N/A',
+        actualRpo: vm.ActualRpo || 0
+      });
+    }
+  });
+
+  return rpoData;
+}
+
+// Function to generate WhatsApp message for Zerto report
+function generateZertoWhatsAppMessage(rpoData, location) {
+  const greeting = getSmartGreeting();
+  const currentTime = getCurrentDateTime();
+  
+  let message = `${greeting}! 🌟\n\n`;
+  message += `📊 *LAPORAN ZERTO REPLICATION - ${location.toUpperCase()}*\n`;
+  message += `🕐 Waktu: ${currentTime}\n\n`;
+
+  if (rpoData.length === 0) {
+    message += `❌ Tidak ada data VM yang ditemukan untuk lokasi ${location}\n\n`;
+    return message;
+  }
+
+  // Group by status
+  const statusGroups = {
+    'Protected': [],
+    'Error': [],
+    'Warning': [],
+    'Other': []
+  };
+
+  rpoData.forEach(vm => {
+    const status = String(vm.status || 'Unknown');
+    if (status === 'MeetingSLA') {
+      statusGroups.Protected.push(vm);
+    } else if (status.includes('NotMeetingSLA') || status.includes('RpoNotMeetingSLA') || status === 'FailingOver' || status === 'Deleting') {
+      statusGroups.Error.push(vm);
+    } else if (status.includes('HistoryNotMeetingSLA') || status === 'Initializing' || vm.rpoInSeconds > 300) {
+      statusGroups.Warning.push(vm);
+    } else {
+      statusGroups.Other.push(vm);
+    }
+  });
+
+  // Summary
+  message += `📈 *RINGKASAN STATUS:*\n`;
+  message += `✅ Protected: ${statusGroups.Protected.length}\n`;
+  message += `⚠️ Warning: ${statusGroups.Warning.length}\n`;
+  message += `❌ Error: ${statusGroups.Error.length}\n`;
+  message += `ℹ️ Lainnya: ${statusGroups.Other.length}\n`;
+  message += `📊 Total VM: ${rpoData.length}\n\n`;
+
+  // Detailed status for errors and warnings
+  if (statusGroups.Error.length > 0) {
+    message += `🚨 *VM DENGAN ERROR:*\n`;
+    statusGroups.Error.forEach(vm => {
+      message += `• ${vm.vmName} (${vm.vpgName})\n  Status: ${vm.status}\n`;
+    });
+    message += `\n`;
+  }
+
+  if (statusGroups.Warning.length > 0) {
+    message += `⚠️ *VM DENGAN WARNING/RPO TINGGI:*\n`;
+    statusGroups.Warning.forEach(vm => {
+      const rpoMinutes = Math.round(vm.rpoInSeconds / 60);
+      message += `• ${vm.vmName} (${vm.vpgName})\n  RPO: ${rpoMinutes} menit\n`;
+    });
+    message += `\n`;
+  }
+
+  // RPO Analysis
+  const avgRpo = rpoData.reduce((sum, vm) => sum + vm.rpoInSeconds, 0) / rpoData.length;
+  const avgRpoMinutes = Math.round(avgRpo / 60);
+  
+  message += `📊 *ANALISIS RPO:*\n`;
+  message += `📈 RPO Rata-rata: ${avgRpoMinutes} menit\n`;
+  
+  const highRpoVms = rpoData.filter(vm => vm.rpoInSeconds > 300);
+  if (highRpoVms.length > 0) {
+    message += `⚠️ VM dengan RPO > 5 menit: ${highRpoVms.length}\n`;
+  }
+
+  message += `\n🔄 *Status Replikasi ${location.toUpperCase()}:* `;
+  if (statusGroups.Error.length === 0 && statusGroups.Warning.length === 0) {
+    message += `✅ SEHAT\n`;
+  } else if (statusGroups.Error.length > 0) {
+    message += `❌ PERLU PERHATIAN\n`;
+  } else {
+    message += `⚠️ MONITORING\n`;
+  }
+
+  message += `\n📱 Laporan otomatis dari NOA WhatsApp API\n`;
+  message += `🤖 Powered by Zerto API Integration`;
+
+  return message;
+}
+
+// Function to process Zerto data for a single location
+async function processZertoLocation(location) {
+  try {
+    let config;
+    
+    if (location.toLowerCase() === 'jepara' || location.toLowerCase() === 'jpr') {
+      config = {
+        baseUrl: process.env.ZERTO_JEPARA_BASE_URL,
+        clientId: process.env.ZERTO_JEPARA_CLIENT_ID,
+        username: process.env.ZERTO_JEPARA_USERNAME,
+        password: process.env.ZERTO_JEPARA_PASSWORD
+      };
+    } else if (location.toLowerCase() === 'jakarta' || location.toLowerCase() === 'jkt') {
+      config = {
+        baseUrl: process.env.ZERTO_JAKARTA_BASE_URL,
+        clientId: process.env.ZERTO_JAKARTA_CLIENT_ID,
+        username: process.env.ZERTO_JAKARTA_USERNAME,
+        password: process.env.ZERTO_JAKARTA_PASSWORD
+      };
+    } else {
+      throw new Error(`Unknown location: ${location}`);
+    }
+
+    // Validate configuration
+    if (!config.baseUrl || !config.clientId || !config.username || !config.password) {
+      throw new Error(`Missing Zerto configuration for ${location}`);
+    }
+
+    // Create Zerto API client
+    const zertoClient = new ZertoAPIClient(
+      config.baseUrl,
+      config.clientId,
+      config.username,
+      config.password
+    );
+
+    // Authenticate
+    const authSuccess = await zertoClient.authenticate();
+    if (!authSuccess) {
+      throw new Error(`Authentication failed for ${location}`);
+    }
+
+    // Get VMs and VPGs data
+    const [vms, vpgs] = await Promise.all([
+      zertoClient.getVMs(),
+      zertoClient.getVpgs()
+    ]);
+
+    // Generate RPO report
+    const rpoData = generateRpoReport(vms, vpgs);
+    
+    // Generate WhatsApp message
+    const whatsappMessage = generateZertoWhatsAppMessage(rpoData, location);
+
+    return {
+      success: true,
+      location: location,
+      message: whatsappMessage,
+      data: {
+        vms: vms.length,
+        vpgs: vpgs.length,
+        rpoData: rpoData.length
+      }
+    };
+
+  } catch (error) {
+    console.error(`Error processing Zerto location ${location}:`, error.message);
+    return {
+      success: false,
+      location: location,
+      error: error.message,
+      message: `❌ *Error mengambil data Zerto ${location.toUpperCase()}*\n\n⚠️ ${error.message}\n\n💡 Silakan coba lagi atau hubungi administrator.`
+    };
   }
 }
 
@@ -1458,45 +1810,48 @@ const handleMessage = async (message) => {
 }
 if (text.startsWith('/zertoreport')) {
   try {
-      // Capture Zerto data
-      const currentDateTimeInfo = getCurrentDateTime();
       const locationParam = text.split(' ')[1];
 
-      sock.sendMessage(from,{text: `Please be patient.. we are composting the report for you..`});
-      // Function to capture Zerto data and send message
-      const sendZertoReport = async (url, captionPrefix) => {
-          const zertoData = await captureZertoWithLogin(url);
-          const summaryPrompt = generateSummaryPrompt(currentDateTimeInfo) + captionPrefix + zertoData.copiedContent;
-          const aiResponse = await answerAI(summaryPrompt);
-          await sock.sendMessage(from, {
-              image: zertoData.screenshotBuffer,
-              caption: aiResponse
-          });
-      };
-
+      await sock.sendMessage(from, {text: `🔄 Sedang mengambil data Zerto... Mohon tunggu sebentar...`});
+      
       if (locationParam === 'jkt') {
-          await sendZertoReport('https://192.168.120.250/main/vms', 'Zerto Site DC: \n');
+          // Jakarta only
+          const result = await processZertoLocation('jakarta');
+          await sock.sendMessage(from, { text: result.message });
       } else if (locationParam === 'jpr') {
-          await sendZertoReport('https://192.168.77.250/main/vms', 'Zerto Site Mini DC: \n');
+          // Jepara only
+          const result = await processZertoLocation('jepara');
+          await sock.sendMessage(from, { text: result.message });
       } else {
-          const zertoDC = await captureZertoWithLogin('https://192.168.120.250/main/vms');
-          const zertoMiniDC = await captureZertoWithLogin('https://192.168.77.250/main/vms');
-          const summaryPrompt = generateSummaryPrompt(currentDateTimeInfo) + 'Zerto DC: \n' + zertoDC.copiedContent + '\n' + 'Zerto MINI DC: \n' + zertoMiniDC.copiedContent;
-          const aiResponse = await answerAI(summaryPrompt);
+          // Both locations
+          const [jakartaResult, jeparaResult] = await Promise.all([
+              processZertoLocation('jakarta'),
+              processZertoLocation('jepara')
+          ]);
 
-          await sock.sendMessage(from, {
-              image: zertoDC.screenshotBuffer,
-              caption: aiResponse
-          });
+          // Send Jakarta report
+          await sock.sendMessage(from, { text: jakartaResult.message });
+          
+          // Send Jepara report
+          await sock.sendMessage(from, { text: jeparaResult.message });
 
-          await sock.sendMessage(from, {
-              image: zertoMiniDC.screenshotBuffer,
-              caption: 'Zerto Mini DC'
-          });
+          // Send combined summary if both successful
+          if (jakartaResult.success && jeparaResult.success) {
+              const combinedSummary = `📊 *RINGKASAN GABUNGAN ZERTO*\n\n` +
+                  `🏢 Jakarta: ${jakartaResult.data.vms} VMs, ${jakartaResult.data.vpgs} VPGs\n` +
+                  `🏭 Jepara: ${jeparaResult.data.vms} VMs, ${jeparaResult.data.vpgs} VPGs\n\n` +
+                  `📈 Total VM Terproteksi: ${jakartaResult.data.vms + jeparaResult.data.vms}\n` +
+                  `🔄 Total VPG Aktif: ${jakartaResult.data.vpgs + jeparaResult.data.vpgs}\n\n` +
+                  `✅ Laporan lengkap telah dikirim untuk kedua lokasi.`;
+              
+              await sock.sendMessage(from, { text: combinedSummary });
+          }
       }
   } catch (error) {
-      console.error('Error capturing Zerto screenshot:', error);
-      await sock.sendMessage(from, { text: 'Error capturing Zerto screenshot. Please try again later.' });
+      console.error('Error in Zerto report:', error);
+      await sock.sendMessage(from, { 
+          text: `❌ *Error Zerto Report*\n\n⚠️ ${error.message}\n\n💡 Silakan coba lagi atau hubungi administrator.` 
+      });
   }
 }
 
