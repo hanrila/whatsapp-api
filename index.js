@@ -1,4 +1,4 @@
-﻿// Load environment variables from .env file
+// Load environment variables from .env file
 require('dotenv').config();
 
 // Configure Puppeteer cache directory to use project directory
@@ -1989,7 +1989,21 @@ const handleMessage = async (message) => {
                     message += `👥 *Manager:* ${user.manager || 'N/A'}\n`;
                     message += `🏷️ *Employee ID:* ${user.employeeID || 'N/A'}\n`;
                     const pwdExpiryDate = convertFileTimeToDateStringDDMMYYYY(user['msDS-UserPasswordExpiryTimeComputed']);
-                    const isExpired = new Date(pwdExpiryDate) < new Date();
+                    // Fix: Properly parse DD/MM/YYYY format instead of relying on Date constructor
+                    // which interprets it as MM/DD/YYYY (US format)
+                    const isExpired = (() => {
+                        if (!pwdExpiryDate || pwdExpiryDate === 'N/A') return false;
+                        
+                        const [datePart, timePart] = pwdExpiryDate.split(' ');
+                        const [day, month, year] = datePart.split('/');
+                        const [hours, minutes] = timePart ? timePart.split(':') : ['0', '0'];
+                        
+                        // Create date with correct DD/MM/YYYY interpretation
+                        const expiryDate = new Date(year, month - 1, day, hours || 0, minutes || 0);
+                        const currentDate = new Date();
+                        
+                        return expiryDate < currentDate;
+                    })();
                     message += `🔐 *Password Status:* ${isExpired ? '❌ Expired' : '✅ Active'}\n`;
                     message += `📅 *Password Expiry:* ${pwdExpiryDate || 'N/A'}\n`;
                     console.log(user);
