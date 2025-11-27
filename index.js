@@ -3147,6 +3147,46 @@ app.get('/pair-code', async (req, res) => {
   }
 });
 
+// Reset session to force QR re-pairing
+app.post('/reset-session', async (req, res) => {
+  try {
+    if (sock) {
+      try {
+        await sock.logout();
+      } catch (e) {}
+    }
+    currentQr = null;
+    currentStatus = 'Resetting session...';
+    io.emit('message', currentStatus);
+    const authDirs = ['auth_info_wsapi', 'auth_info'];
+    for (const dir of authDirs) {
+      const dirPath = path.join(__dirname, dir);
+      if (fs.existsSync(dirPath)) {
+        try {
+          fs.rmSync(dirPath, { recursive: true, force: true });
+        } catch (e) {}
+      }
+    }
+    await new Promise(r => setTimeout(r, 500));
+    startSock();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Get current QR image (Data URL)
+app.get('/qr', async (req, res) => {
+  try {
+    if (!currentQr) {
+      return res.status(404).json({ success: false, error: 'QR not available' });
+    }
+    res.json({ success: true, dataUrl: currentQr });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // app.listen(PORT, () => {
 //     console.log(`Server running on port ${PORT}`);
 // });
