@@ -1,13 +1,13 @@
-﻿// Load environment variables from .env file
+// Load environment variables from .env file
 require('dotenv').config();
 
 // Configure Puppeteer cache directory to use project directory
 const path = require('path');
-const projectCacheDir = path.join(__dirname, 'puppeteer-cache');
-process.env.PUPPETEER_CACHE_DIR = projectCacheDir;
-console.log(`Setting PUPPETEER_CACHE_DIR to: ${projectCacheDir}`);
 
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
+process.env.PUPPETEER_CACHE_DIR = 'C:\\Users\\hanri\\.cache\\puppeteer';
+
+
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers, downloadContentFromMessage, downloadMediaMessage } = require('@whiskeysockets/baileys');
 //const {default: makeWASocket,AnyMessageContent, BinaryInfo, delay, DisconnectReason, encodeWAM, fetchLatestBaileysVersion, getAggregateVotesInPollMessage, makeCacheableSignalKeyStore, makeInMemoryStore, PHONENUMBER_MCC, proto, useMultiFileAuthState, WAMessageContent, WAMessageKey}= require('@whiskeysockets/baileys');
 //import { WAMessageKey, WAMessageContent, proto } from '@whiskeysockets/baileys';
 
@@ -50,7 +50,6 @@ const io = require('socket.io')(server);
 //Excel file handling
 const ExcelJS = require('exceljs');
 const fs = require('fs');
-const { downloadContentFromMessage, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const mime = require('mime-types');
 const https = require('https');
 
@@ -71,6 +70,8 @@ const logger = Pino({ level: 'silent' });
 let sock;
 let currentStatus = 'Connecting...';
 let currentQr = null;
+// Track processed message IDs per chat to prevent duplicate handling
+const processedMessages = new Map(); // Map<chatId, Set<messageId>>
 
 io.on('connection', (socket) => {
   console.log('A user connected');
@@ -486,11 +487,19 @@ async function processZertoLocation(location) {
         username: process.env.ZERTO_JAKARTA_USERNAME,
         password: process.env.ZERTO_JAKARTA_PASSWORD
       };
+      console.log(`[Zerto] Debugging Jakarta Credentials: Username = ${process.env.ZERTO_JAKARTA_USERNAME}, Password = ${process.env.ZERTO_JAKARTA_PASSWORD}`);
     } else {
       throw new Error(`Unknown location: ${location}`);
     }
 
     // Validate configuration
+    console.log(`[Zerto] Configuration for ${location}:`, {
+      baseUrl: config.baseUrl,
+      clientId: config.clientId,
+      username: config.username ? 'SET' : 'NOT SET',
+      password: config.password ? 'SET' : 'NOT SET'
+    });
+
     if (!config.baseUrl || !config.clientId || !config.username || !config.password) {
       throw new Error(`Missing Zerto configuration for ${location}`);
     }
@@ -505,6 +514,7 @@ async function processZertoLocation(location) {
 
     // Authenticate
     const authSuccess = await zertoClient.authenticate();
+    console.log(`[Zerto] Authentication for ${location} successful: ${authSuccess}`);
     if (!authSuccess) {
       throw new Error(`Authentication failed for ${location}`);
     }
@@ -517,6 +527,7 @@ async function processZertoLocation(location) {
 
     // Generate RPO report
     const rpoData = generateRpoReport(vms, vpgs);
+    console.log(`[Zerto] RPO Data for ${location}:`, rpoData);
     
     // Generate WhatsApp message for single location
     const whatsappMessage = generateZertoWhatsAppMessage(
@@ -711,7 +722,7 @@ const bjpCompConfig = {
   };
   
   const bjpConfig = {
-    url: 'ldaps://192.168.75.100:636',
+    url: 'ldaps://192.168.75.10:636',
     baseDN: 'dc=pt-bjp,dc=co,dc=id',
     username: 'pt-bjp\\administrator',
     password: process.env.BJP_AD_PASSWORD || 'your-bjp-ad-password-here',
@@ -806,8 +817,7 @@ const folders = [
   'BJS PRC',
   'BJS ACT',
   'HOUSING FACILITY',
-  'RECRUITMENT',
-  'DOCUMENT REVIEW'
+  'RECRUITMENT'
 ];
 
 const ACL_BJP = [
@@ -828,8 +838,7 @@ const ACL_BJP = [
   'ACL_BJP PROC CDN',
   'ACL_FINANCE',
   'ACL_BJP Housing Facility for BJS',
-  'ACL_RECRUITMENT',
-  'ACL_BJP DOCUMENT REVIEW'
+  'ACL_RECRUITMENT'
 ];
 
 
@@ -851,8 +860,7 @@ const ACL_BJS = [
   'ACL_BJS PROC CDN',
   'ACL_BJS ACT',
   'ACL_BJS HOUSING FACILITY',
-  'ACL_BJS RECRUITMENT',
-  'ACL_BJS DOCUMENT REVIEW'
+  'ACL_BJS RECRUITMENT'
 ];
 
 const sharepointPath = {
@@ -875,7 +883,7 @@ const sharepointPath = {
   'officeall': 'https://ptbjs.sharepoint.com/sites/OFFICEALL'
 };
 
-const drive = ['L', 'M', 'R', 'T', 'Q', 'Q', 'W', 'X', 'Y', 'Z', 'N', 'O', 'K', 'J', 'I', 'V', 'H', 'U', 'G'];
+const drive = ['L', 'M', 'R', 'T', 'Q', 'Q', 'W', 'X', 'Y', 'Z', 'N', 'O', 'K', 'J', 'I', 'V', 'H', 'U'];
 
 const folder_path = [
   "\\shared\\OFFICE ALL\\",
@@ -895,8 +903,7 @@ const folder_path = [
   "\\shared\\BJS PRC\\",
   "\\shared\\BJS ACT\\",
   "\\shared\\HOUSING FACILITY\\",
-  "\\shared\\RECRUITMENT\\",
-  "\\shared\\OPERATION\\DOCUMENT CONTROL\\DOCUMENT REVIEW\\"
+  "\\shared\\RECRUITMENT\\"
 ];
 
 // Create ActiveDirectory objects for each configuration
@@ -1250,6 +1257,14 @@ async function getUserDrives(upn) {
         driveLetter: drive[index],
         path: folder_path[index]
       }));
+      
+      // Add G: drive for ACL_BJS OFFICE ALL members
+      if (groups.includes('ACL_BJS OFFICE ALL')) {
+        availableDrives.push({
+          driveLetter: 'G',
+          path: '\\192.168.77.15\\Shared (Multimedia)'
+        });
+      }
     } else if (domain === 'pt-bjp.co.id') {
       // Check if the user is a member of ACL_BJP
       const indices = ACL_BJP.reduce((acc, group, index) => {
@@ -1263,6 +1278,14 @@ async function getUserDrives(upn) {
         driveLetter: drive[index],
         path: folder_path[index]
       }));
+      
+      // Add G: drive for ACL_OFFICE ALL members
+      if (groups.includes('ACL_OFFICE ALL')) {
+        availableDrives.push({
+          driveLetter: 'G',
+          path: "\\192.168.77.15\\Shared (Multimedia)"
+        });
+      }
     }
 
     console.log(`Drives for user ${upn}:`);
@@ -1273,6 +1296,115 @@ async function getUserDrives(upn) {
     const errorMessage = error.message.match(/CategoryInfo\s+:\s+(.*)/)?.[1];
     console.error(`Error getting user drives: ${errorMessage}`);
     return { success: false, error: errorMessage };
+  }
+}
+
+// Retrieve BitLocker recovery information from Active Directory
+async function getBitLockerRecoveryInfo(hostname, domainKey) {
+  try {
+    const domain = domainKey && domainKey.toLowerCase();
+    const ad = domain === 'bjp' ? adCompbjp : domain === 'bjs' ? adCompbjs : null;
+
+    const tryDomains = ad ? [ { key: domain, ad } ] : [ { key: 'bjp', ad: adCompbjp }, { key: 'bjs', ad: adCompbjs } ];
+
+    for (const d of tryDomains) {
+      const currentAd = d.ad;
+      // Find the computer DN by CN/hostname with robust fallbacks
+      const sAM = `${hostname}$`;
+      const filters = [
+        `(&(objectClass=computer)(cn=${hostname}))`,
+        `(&(objectClass=computer)(|(sAMAccountName=${sAM})(sAMAccountName=${hostname})))`,
+        `(&(objectClass=computer)(|(cn=*${hostname}*)(name=*${hostname}*)))`
+      ];
+
+      let computerObj = null;
+      for (const computerFilter of filters) {
+        const computerQuery = {
+          baseDN: currentAd.opts.baseDN,
+          filter: computerFilter,
+          scope: 'sub',
+          attributes: [ 'distinguishedName', 'dn', 'cn', 'name', 'sAMAccountName' ]
+        };
+
+        const computerResult = await new Promise((resolve, reject) => {
+          currentAd.find(computerQuery, (err, result) => {
+            if (err) return reject(err);
+            resolve(result);
+          });
+        });
+
+        const candidate = computerResult && (computerResult.other || []).find(obj => obj.dn || obj.distinguishedName);
+        if (candidate) { computerObj = candidate; break; }
+      }
+
+      const computerDN = computerObj ? (computerObj.dn || computerObj.distinguishedName) : null;
+
+      if (!computerDN) {
+        // Try next domain
+        continue;
+      }
+
+      // Search for BitLocker recovery info under the computer DN
+      const recoveryQuery = {
+        baseDN: computerDN,
+        filter: '(objectClass=msFVE-RecoveryInformation)',
+        scope: 'sub',
+        attributes: [ 'msFVE-RecoveryPassword', 'msFVE-RecoveryGuid', 'whenCreated', 'distinguishedName', 'dn' ]
+      };
+
+      const recoveryResult = await new Promise((resolve, reject) => {
+        currentAd.find(recoveryQuery, (err, result) => {
+          if (err) return reject(err);
+          resolve(result);
+        });
+      });
+
+      const entriesRaw = (recoveryResult && recoveryResult.other) ? recoveryResult.other : [];
+      const entries = entriesRaw
+        .map(o => ({
+          domain: d.key,
+          password: o['msFVE-RecoveryPassword'],
+          guid: o['msFVE-RecoveryGuid'],
+          whenCreated: o['whenCreated'],
+          dn: o['dn'] || o['distinguishedName'] || computerDN
+        }))
+        .filter(e => !!e.password);
+
+      if (entries.length === 0) {
+        // Try next domain
+        continue;
+      }
+
+      // Sort by whenCreated descending (AD Generalized Time format YYYYMMDDHHmmSS.0Z)
+      const parseGenTime = (s) => {
+        try {
+          const m = s && s.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/);
+          if (!m) return null;
+          return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
+        } catch { return null; }
+      };
+
+      const sorted = entries.sort((a, b) => {
+        const da = parseGenTime(a.whenCreated);
+        const db = parseGenTime(b.whenCreated);
+        if (da && db) return db - da; // latest first
+        // Fallback: lexicographic compare if parsing fails
+        if (a.whenCreated && b.whenCreated) return b.whenCreated.localeCompare(a.whenCreated);
+        return 0;
+      });
+
+      return {
+        success: true,
+        domain: d.key,
+        computerDN,
+        entries: sorted,
+        latest: sorted[0]
+      };
+    }
+
+    return { success: false, error: 'Computer atau BitLocker Recovery tidak ditemukan di kedua domain.' };
+  } catch (error) {
+    return { success: false, error: error.message };
   }
 }
 
@@ -1820,6 +1952,12 @@ const handleMessage = async (message) => {
       sites: 'legal, bdlog, bjphrga, bjshrga, facc, csr, site, opr, jtm, hse, mmt, emt, eng, prc, act, officelimited, officeall',
       example: '/sp legal',
       category: 'Resource Management'
+    },
+    bitlocker: {
+      usage: '/bitlocker <hostname> [/domain:bjp|bjs] [/latest]\natau\n/bitlocker [/domain:bjp|bjs] <hostname> [/latest]',
+      description: 'Ambil BitLocker Recovery Key dari Active Directory berdasarkan hostname. Default menampilkan semua key, gunakan /latest untuk hanya key terbaru. Domain dapat ditulis di depan atau di belakang hostname.',
+      example: '/bitlocker /domain:bjs BJSPRLD066\natau\n/bitlocker BJSPRLD066 /domain:bjs',
+      category: 'Security'
     }
   };
 
@@ -1989,7 +2127,21 @@ const handleMessage = async (message) => {
                     message += `👥 *Manager:* ${user.manager || 'N/A'}\n`;
                     message += `🏷️ *Employee ID:* ${user.employeeID || 'N/A'}\n`;
                     const pwdExpiryDate = convertFileTimeToDateStringDDMMYYYY(user['msDS-UserPasswordExpiryTimeComputed']);
-                    const isExpired = new Date(pwdExpiryDate) < new Date();
+                    // Fix: Properly parse DD/MM/YYYY format instead of relying on Date constructor
+                    // which interprets it as MM/DD/YYYY (US format)
+                    const isExpired = (() => {
+                        if (!pwdExpiryDate || pwdExpiryDate === 'N/A') return false;
+                        
+                        const [datePart, timePart] = pwdExpiryDate.split(' ');
+                        const [day, month, year] = datePart.split('/');
+                        const [hours, minutes] = timePart ? timePart.split(':') : ['0', '0'];
+                        
+                        // Create date with correct DD/MM/YYYY interpretation
+                        const expiryDate = new Date(year, month - 1, day, hours || 0, minutes || 0);
+                        const currentDate = new Date();
+                        
+                        return expiryDate < currentDate;
+                    })();
                     message += `🔐 *Password Status:* ${isExpired ? '❌ Expired' : '✅ Active'}\n`;
                     message += `📅 *Password Expiry:* ${pwdExpiryDate || 'N/A'}\n`;
                     console.log(user);
@@ -2000,6 +2152,104 @@ const handleMessage = async (message) => {
     } catch (err) {
         console.error('Error finding user:', err);
         sock.sendMessage(from, { text: `Error finding user: ${err.message}` });
+    }
+  }
+
+  // BitLocker recovery key lookup
+  else if (text.startsWith('/bitlocker')) {
+    try {
+      const parts = text.split(/ |\u00A0|'/).filter(Boolean);
+      let domainKey = null;
+      let latestOnly = false;
+      let hostname = null;
+
+      parts.forEach((param) => {
+        if (param.startsWith('/domain:')) {
+          domainKey = param.split(':')[1];
+        } else if (param.toLowerCase() === '/latest') {
+          latestOnly = true;
+        } else if (param && !param.startsWith('/bitlocker') && !param.startsWith('/')) {
+          hostname = param;
+        }
+      });
+
+      if (!hostname) {
+        await sock.sendMessage(from, { text: '❌ Hostname tidak diberikan.\n\nPenggunaan: /bitlocker <hostname> [/domain:bjp|bjs] [/latest] atau /bitlocker [/domain:bjp|bjs] <hostname>\nContoh: /bitlocker PC-BJP-001 /domain:bjp /latest atau /bitlocker /domain:bjp PC-BJP-001' });
+        return;
+      }
+
+      // Kirim acknowledgement agar user tahu proses sedang berjalan
+      await sock.sendMessage(from, { text: `🔎 Mencari BitLocker Recovery Key untuk host: ${hostname}${domainKey ? ` (domain: ${domainKey.toLowerCase()})` : ''}...` });
+
+      // Authorization: BitLocker lookup is allowed for all users as requested.
+      // Previously restricted via allowedPhoneNumbers; now removed for /bitlocker only.
+
+      // Tambahkan timeout agar bot tidak diam jika koneksi LDAP lambat/terblokir
+      const timeoutMs = 15000; // 15 detik per percobaan
+      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve({ success: false, error: `Timeout mencari data BitLocker (>${timeoutMs/1000}s). Pastikan koneksi ke LDAP terbuka.` }), timeoutMs));
+      const result = await Promise.race([
+        getBitLockerRecoveryInfo(hostname, domainKey),
+        timeoutPromise
+      ]);
+
+      const { success, domain, computerDN, entries, latest, error } = result;
+
+      if (!success) {
+        await sock.sendMessage(from, { text: `❌ Gagal mengambil BitLocker Recovery Key untuk host: ${hostname}\n\nAlasan: ${error || 'Tidak diketahui'}` });
+        return;
+      }
+
+      const toLocal = (gt) => {
+        try {
+          const m = gt && gt.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/);
+          if (!m) return gt || '-';
+          const d = new Date(Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]));
+          const pad = (n) => String(n).padStart(2, '0');
+          return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        } catch { return gt || '-'; }
+      };
+
+      const formatGuid = (val) => {
+        try {
+          if (!val) return '-';
+          if (Buffer.isBuffer(val)) {
+            const b = Uint8Array.from(val);
+            const hex = (arr) => Array.from(arr).map(x => x.toString(16).padStart(2, '0')).join('');
+            const tl = hex(b.slice(0,4).reverse());
+            const tm = hex(b.slice(4,6).reverse());
+            const th = hex(b.slice(6,8).reverse());
+            const a = hex(b.slice(8,10));
+            const rest = hex(b.slice(10,16));
+            return `${tl}-${tm}-${th}-${a}-${rest}`.toUpperCase();
+          }
+          const s = Array.isArray(val) ? val[0] : val;
+          if (typeof s === 'string') {
+            if (/^[0-9a-fA-F-]{32,36}$/.test(s)) return s.toUpperCase();
+            return Buffer.from(s, 'binary').toString('hex').toUpperCase();
+          }
+          return String(s);
+        } catch { return '-'; }
+      };
+
+      const list = (latestOnly ? [latest] : entries).map((e, idx) => {
+        const guidRaw = Array.isArray(e.guid) ? e.guid[0] : e.guid;
+        const password = Array.isArray(e.password) ? e.password[0] : e.password;
+        const createdRaw = Array.isArray(e.whenCreated) ? e.whenCreated[0] : e.whenCreated;
+        const created = toLocal(createdRaw);
+        const guid = formatGuid(guidRaw);
+        return `#${idx + 1} \n• Tanggal: ${created} \n• GUID: ${guid} \n• Recovery Password: ${password}`;
+      }).join('\n\n');
+
+      const header = `🔐 *BitLocker Recovery Key*\n\n🖥️ Hostname: ${hostname}\n🏢 Domain: ${domain.toUpperCase()}\n📂 Computer DN: ${computerDN}`;
+      const hint = latestOnly ? '' : '\n\n💡 Gunakan kunci terbaru terlebih dahulu (#1).';
+
+      // Avoid logging sensitive data
+      console.log(`BitLocker: fetched ${latestOnly ? 1 : entries.length} key(s) for ${hostname} in domain ${domain}.`);
+
+      await sock.sendMessage(from, { text: `${header}\n\n${list}${hint}` });
+    } catch (err) {
+      console.error(`Error processing /bitlocker command: ${err.message}`);
+      await sock.sendMessage(from, { text: `❌ Terjadi kesalahan saat memproses perintah: ${err.message}` });
     }
   }
   //Get UPS status from Zabbix
@@ -2410,18 +2660,6 @@ const extractFileName = (message) => {
     message.message.documentWithCaptionMessage ? message.message.documentWithCaptionMessage.message.documentMessage.fileName : null;
 };
 
-// const extractMessageContent = (message) => {
-//   return message.message.conversation ? message.message.conversation :
-//     message.message.imageMessage ? message.message.imageMessage.caption :
-//     message.message.documentMessage ? message.message.documentMessage.caption :
-//     message.message.documentWithCaptionMessage ? message.message.documentWithCaptionMessage.message.documentMessage.caption :
-//     message.message.videoMessage ? message.message.videoMessage.caption :
-//     message.message.extendedTextMessage ? message.message.extendedTextMessage.text :
-//     message.message.buttonsResponseMessage ? message.message.buttonsResponseMessage.selectedButtonId :
-//     message.message.listResponseMessage ? message.message.listResponseMessage.singleSelectReply.selectedRowId :
-//     message.message.templateButtonReplyMessage ? message.message.templateButtonReplyMessage.selectedId :
-//     message.message.buttonsResponseMessage?.selectedButtonId || message.message.listResponseMessage?.singleSelectReply.selectedRowId || message.text;
-// };
 const extractMessageContent = (message) => {
   if (message.message) {
       if (message.message.conversation) return message.message.conversation;
@@ -2443,7 +2681,7 @@ const startSock = async () => {
         console.log('Using Baileys version:', version);
 
         console.log('Initializing auth state...');
-        const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+        const { state, saveCreds } = await useMultiFileAuthState('auth_info_wsapi');
         console.log('Auth state initialized');
 
         console.log('Creating WhatsApp socket...');
@@ -2451,9 +2689,9 @@ const startSock = async () => {
             version,
             auth: state,
             logger: Pino({ level: 'silent' }),
-            //browser: Browsers.macOS('Desktop'),
-            syncFullHistory: true,
-            printQRInTerminal: false // This ensures the QR code is printed in the terminal
+            browser: Browsers.windows('Desktop'),
+            syncFullHistory: false,
+            printQRInTerminal: true
 
         });
 
@@ -2509,8 +2747,36 @@ const startSock = async () => {
         sock.ev.on('messages.upsert', async (m) => {
           if (m.type !== 'notify') return;
           const message = m.messages[0];
-          if (!message.message) return;
+          if (!message?.message) return;
+          // unwrap ephemeral messages
           message.message = Object.keys(message.message)[0] === "ephemeralMessage" ? message.message.ephemeralMessage.message : message.message;
+
+          // Deduplication guard: ignore messages that have already been processed for this chat
+          const chatId = message?.key?.remoteJid;
+          const msgId = message?.key?.id;
+          const fromMe = message?.key?.fromMe;
+          if (fromMe) {
+            console.log('Ignoring message from self:', msgId);
+            return;
+          }
+          if (!chatId || !msgId) {
+            console.log('Skipping message without chatId/msgId');
+            return;
+          }
+          const set = processedMessages.get(chatId) || new Set();
+          if (set.has(msgId)) {
+            console.log('Duplicate message ignored:', chatId, msgId);
+            return;
+          }
+          set.add(msgId);
+          // Prevent unbounded growth (simple cap)
+          if (set.size > 500) {
+            // reset the set when it becomes too large
+            processedMessages.set(chatId, new Set([msgId]));
+          } else {
+            processedMessages.set(chatId, set);
+          }
+
           console.log('Received a new message:', message);
 
           // Differentiating message content
@@ -2862,6 +3128,23 @@ app.post('/send-group-message', [
             response: err.toString()
         });
     }
+});
+
+app.get('/pair-code', async (req, res) => {
+  try {
+    if (!sock) {
+      return res.status(503).json({ success: false, error: 'Socket not initialized' });
+    }
+    const raw = String(req.query.number || '').trim();
+    if (!raw) {
+      return res.status(400).json({ success: false, error: 'Missing number query param' });
+    }
+    const formatted = phoneNumberFormatter(raw).replace('@c.us', '');
+    const code = await sock.requestPairingCode(formatted);
+    res.json({ success: true, number: formatted, code });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // app.listen(PORT, () => {

@@ -12,7 +12,7 @@
   "type": "commonjs",
   "dependencies": {
     "@hapi/boom": "^10.0.1",
-    "@whiskeysockets/baileys": "^6.7.18",
+    "@whiskeysockets/baileys": "^6.7.21",
     "activedirectory2": "^2.2.0",
     "axios": "^1.11.0",
     "dotenv": "^17.2.1",
